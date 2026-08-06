@@ -1,4 +1,4 @@
-import { hash as argonHash, verify as argonVerify, Algorithm } from '@node-rs/argon2';
+import { hash as argonHash, verify as argonVerify } from '@node-rs/argon2';
 import {
   createCipheriv,
   createDecipheriv,
@@ -23,8 +23,18 @@ import {
  * pada CPU, bukan pada jumlah koneksi — dan anggaran p99 400 ms dihitung dengan
  * angka ini di depan mata, bukan sesudahnya.
  */
+/**
+ * Nilai `Algorithm.Argon2id` dari `@node-rs/argon2`.
+ *
+ * Ditulis sebagai angka bernama karena enum-nya ambient const, dan
+ * `verbatimModuleSyntax` melarang aksesnya. Dibiarkan implisit lewat nilai
+ * bawaan pustaka akan menyembunyikan parameter keamanan yang justru harus
+ * paling terlihat.
+ */
+const ARGON2ID = 2;
+
 export const ARGON2 = {
-  algorithm: Algorithm.Argon2id,
+  algorithm: ARGON2ID,
   memoryCost: 64 * 1024,
   timeCost: 3,
   parallelism: 1,

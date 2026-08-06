@@ -83,7 +83,8 @@ describe('enkripsi kolom', () => {
 
   it('menolak sandi yang dirusak (tag GCM)', () => {
     const sandi = encryptColumn(keys, 'rahasia');
-    sandi[sandi.length - 1] ^= 0xff;
+    const akhir = sandi.length - 1;
+    sandi.writeUInt8(sandi.readUInt8(akhir) ^ 0xff, akhir);
     expect(() => decryptColumn(keys, sandi)).toThrow();
   });
 });
