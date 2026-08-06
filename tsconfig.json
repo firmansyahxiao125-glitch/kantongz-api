@@ -19,5 +19,5 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src", "drizzle.config.ts", "eslint.config.js"]
+  "include": ["src"]
 }
