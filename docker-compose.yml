@@ -1,0 +1,50 @@
+name: kantongz-api
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: kantongz
+      POSTGRES_PASSWORD: kantongz
+      POSTGRES_DB: kantongz
+    ports: ['5432:5432']
+    volumes: ['pgdata:/var/lib/postgresql/data']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U kantongz -d kantongz']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    # Persistensi disk DIMATIKAN. M3_SPEC §5.3 dan §19.2 — isi Redis berumur
+    # pendek dan tidak boleh meninggalkan jejak di disk.
+    command: ['redis-server', '--appendonly', 'no', '--save', '']
+    ports: ['6379:6379']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: info
+      PORT: '3000'
+      HOST: 0.0.0.0
+      DATABASE_URL: postgres://kantongz:kantongz@postgres:5432/kantongz
+      REDIS_URL: redis://redis:6379
+      JWT_ISSUER: https://api.kantongz.id
+      JWT_AUDIENCE: kantongz-mobile
+    ports: ['3000:3000']
+    # Meneruskan SIGTERM ke PID 1 supaya penutupan tertib benar-benar berjalan.
+    init: true
+    restart: unless-stopped
+
+volumes:
+  pgdata:

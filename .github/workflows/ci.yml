@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push: { branches: [main] }
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kantongz
+          POSTGRES_PASSWORD: kantongz
+          POSTGRES_DB: kantongz
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U kantongz"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://kantongz:kantongz@localhost:5432/kantongz
+      REDIS_URL: redis://localhost:6379
+      JWT_ISSUER: https://api.kantongz.id
+      JWT_AUDIENCE: kantongz-mobile
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm }
+
+      - run: npm ci
+
+      # Setiap langkah gagal menghentikan pipeline. Tidak ada `continue-on-error`
+      # di mana pun — gerbang yang boleh dilewati bukan gerbang.
+      - name: TypeScript
+        run: npm run typecheck
+      - name: ESLint
+        run: npm run lint
+      - name: Tes
+        run: npm test
+      - name: Build
+        run: npm run build
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build citra
+        uses: docker/build-push-action@v6
+        with: { context: ., push: false, tags: 'kantongz-api:ci' }
