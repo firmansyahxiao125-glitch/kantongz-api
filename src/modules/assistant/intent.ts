@@ -91,6 +91,9 @@ const PERIOD_RULES: readonly { period: Period; keywords: readonly string[] }[] =
  */
 const PERIOD_WORDS = /\b(bulan|minggu|pekan|hari|kuartal|tahun|sekarang|kemarin|lalu|ini|terakhir)\b/;
 
+/** Penanda bahwa pertanyaannya berbicara tentang kategori sebagai kelompok. */
+const CATEGORY_WORD = /\bkategori\b/;
+
 function extractCategoryHint(question: string): string | null {
   const match = /\b(?:untuk|buat|di|pada)\s+(.+)$/i.exec(question);
   if (!match?.[1]) return null;
@@ -140,6 +143,23 @@ export function resolveQuestion(question: string): ResolvedQuestion | null {
    * yang tersisa sesudahnya, pertanyaannya bukan tentang kategori.
    */
   if (intent === 'spend_by_category' && categoryHint === null) return null;
+
+  /*
+   * "Kategori terbesar" adalah pertanyaan tentang KATEGORI, bukan tentang satu
+   * transaksi. Urutan aturan sendiri tidak dapat memutuskannya: "terbesar" dan
+   * "kategori" keduanya penanda sah, dan mana pun yang diletakkan lebih dahulu
+   * akan salah untuk separuh pertanyaan.
+   *
+   * Yang membedakan bukan urutan melainkan kekhususan: bila kalimatnya
+   * menyebut kategori secara eksplisit TANPA menunjuk satu kategori tertentu,
+   * yang diminta adalah peringkat kategori. Menjawabnya dengan satu transaksi
+   * menghasilkan angka yang benar untuk pertanyaan yang salah — dan nama
+   * pedagang yang muncul di tempat nama kategori terbaca sebagai jawaban yang
+   * meyakinkan, bukan sebagai kekeliruan.
+   */
+  if (intent === 'largest_expense' && categoryHint === null && CATEGORY_WORD.test(text)) {
+    intent = 'top_categories';
+  }
 
   let period: Period = 'this_month';
   for (const rule of PERIOD_RULES) {

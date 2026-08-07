@@ -39,6 +39,21 @@ describe('maksud pertanyaan', () => {
     expect(resolveQuestion('belanja paling mahal bulan lalu')?.intent).toBe('largest_expense');
   });
 
+  it('membedakan kategori terbesar dari transaksi terbesar', () => {
+    /* Keduanya memuat "terbesar". Yang menyebut kategori meminta peringkat
+       kategori; menjawabnya dengan satu transaksi menampilkan nama pedagang di
+       tempat nama kategori — angka yang benar untuk pertanyaan yang salah. */
+    expect(resolveQuestion('kategori terbesar bulan ini')?.intent).toBe('top_categories');
+    expect(resolveQuestion('kategori apa yang paling boros')?.intent).toBe('top_categories');
+    expect(resolveQuestion('transaksi terbesar bulan ini')?.intent).toBe('largest_expense');
+
+    /* Kategori yang DITUNJUK tetap pertanyaan tentang satu kategori, dan
+       "terbesar" di dalamnya tetap berarti transaksi terbesar. */
+    expect(resolveQuestion('pengeluaran terbesar untuk transportasi')?.intent).toBe(
+      'largest_expense',
+    );
+  });
+
   it('mengenali pertanyaan anggaran, langganan, dan ketahanan saldo', () => {
     expect(resolveQuestion('anggaranku bagaimana')?.intent).toBe('budget_status');
     expect(resolveQuestion('langgananku apa saja')?.intent).toBe('subscriptions');
