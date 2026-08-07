@@ -16,7 +16,8 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/platform/db/migrate.ts",
-    "keys:generate": "node scripts/generate-keys.mjs"
+    "keys:generate": "node scripts/generate-keys.mjs",
+    "e2e": "bash scripts/e2e.sh"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.0.2",

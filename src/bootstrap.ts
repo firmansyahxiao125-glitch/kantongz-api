@@ -7,6 +7,8 @@ import type { RedisHandle } from './platform/redis/client.js';
 import { registerAuth, type DeliverCode } from './modules/auth/wiring.js';
 import { registerLedger } from './modules/ledger/wiring.js';
 import { seedSystemCategories } from './modules/ledger/seed.js';
+import { createHttpMailer, type Mailer } from './modules/outbox/mailer.js';
+import { startWorker, type WorkerHandle } from './modules/outbox/worker.js';
 
 /**
  * Perakitan dan siklus hidup proses.
@@ -22,6 +24,40 @@ export const VERSION = '0.1.0';
 export interface Runtime {
   app: App;
   logger: Logger;
+  outbox: WorkerHandle;
+}
+
+/**
+ * Penyedia email, atau pencatat kalau kredensialnya belum ada.
+ *
+ * Mode catat-saja BUKAN pengiriman palsu: pesan tetap melewati outbox, tetap
+ * ditandai terkirim, dan tetap terlihat di `/readyz`. Yang tidak terjadi hanya
+ * langkah terakhirnya — dan itu jujur terhadap keadaan, sebab tanpa kredensial
+ * memang tidak ada yang bisa berangkat.
+ */
+function mailerFor(config: Config, logger: Logger): Mailer {
+  if (config.MAIL_ENDPOINT && config.MAIL_API_KEY && config.MAIL_FROM) {
+    return createHttpMailer({
+      endpoint: config.MAIL_ENDPOINT,
+      apiKey: config.MAIL_API_KEY,
+      from: config.MAIL_FROM,
+    });
+  }
+
+  logger.warn(
+    'MAIL_ENDPOINT belum diisi — pekerja outbox berjalan dalam mode catat-saja, tidak ada email yang berangkat',
+  );
+
+  return {
+    send: (message) => {
+      /* Subjek dan kunci idempotensi saja. Badan pesan memuat kodenya. */
+      logger.info(
+        { subject: message.subject, idempotencyKey: message.idempotencyKey },
+        'email tidak dikirim (mode catat-saja)',
+      );
+      return Promise.resolve();
+    },
+  };
 }
 
 export async function bootstrap(
@@ -43,7 +79,18 @@ export async function bootstrap(
   const seeded = await seedSystemCategories(db.db);
   if (seeded > 0) logger.info({ seeded }, 'kategori bawaan ditanam');
 
-  return { app, logger };
+  /* Pekerja outbox hidup di dalam proses API. `FOR UPDATE SKIP LOCKED` membuat
+     sepuluh instans aman menjalankannya bersamaan, jadi tidak ada alasan
+     menambah satu proses lagi untuk disebarkan dan dipantau. */
+  const outbox = startWorker({
+    db: db.db,
+    mailer: mailerFor(config, logger),
+    logger,
+    intervalMs: config.OUTBOX_INTERVAL_MS,
+    batchSize: config.OUTBOX_BATCH_SIZE,
+  });
+
+  return { app, logger, outbox };
 }
 
 /**
@@ -74,6 +121,10 @@ export async function serve(
       /* Urutannya: berhenti menerima permintaan baru, selesaikan yang berjalan,
          BARU tutup dependensi. Membalik urutan ini membuat permintaan terakhir
          gagal justru karena kita sedang rapi-rapi. */
+      /* Pekerja dihentikan SEBELUM koneksi ditutup: putaran yang sedang
+         berjalan memegang transaksi, dan menutup pool di bawahnya membuat
+         pesan yang sudah terkirim tidak pernah tertandai. */
+      runtime.outbox.stop();
       await app.close();
       await Promise.allSettled(closers.map((close) => close()));
       logger.info('penutupan selesai');

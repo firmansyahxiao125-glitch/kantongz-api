@@ -2,5 +2,15 @@
   "extends": "./tsconfig.json",
   "compilerOptions": { "noEmit": false },
   "include": ["src"],
-  "exclude": ["src/**/*.test.ts", "src/**/__tests__/**"]
+  /* `standalone.ts` dan pasangan dalam-memorinya TIDAK ikut ke citra produksi.
+     Keduanya bergantung pada PGlite, yang merupakan devDependency — dan berkas
+     yang ada di citra produksi tetapi tidak dapat berjalan hanya menunggu
+     seseorang menjalankannya. */
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/**/__tests__/**",
+    "src/standalone.ts",
+    "src/platform/db/memory.ts",
+    "src/platform/redis/memory.ts"
+  ]
 }

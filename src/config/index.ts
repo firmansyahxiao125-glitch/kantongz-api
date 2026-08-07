@@ -60,14 +60,40 @@ const schema = z.object({
   /** Naik satu setiap rotasi kunci HMAC. Baris lama tetap terbaca lewat
    *  `hmac_key_version` miliknya sendiri. §7.1 */
   HMAC_KEY_VERSION: z.coerce.number().int().min(1).default(1),
+
+  /**
+   * Penyedia email. §7.
+   *
+   * Ketiganya opsional bersama-sama: tanpa mereka pekerja outbox berjalan dalam
+   * mode CATAT SAJA — pesan tetap diantrekan dan tetap ditandai terkirim, tetapi
+   * tidak ada yang berangkat. Itu yang benar untuk pengembangan, dan `/readyz`
+   * yang menunjukkan antrean menumpuk kalau seseorang lupa mengisinya di
+   * produksi.
+   */
+  MAIL_ENDPOINT: z.string().url().optional(),
+  MAIL_API_KEY: z.string().min(1).optional(),
+  MAIL_FROM: z.string().email().optional(),
+
+  /** Jeda antar putaran pekerja outbox. */
+  OUTBOX_INTERVAL_MS: z.coerce.number().int().min(200).max(60_000).default(2_000),
+  OUTBOX_BATCH_SIZE: z.coerce.number().int().min(1).max(200).default(20),
 });
 
 /* Setengah pasangan kunci lama lebih berbahaya daripada tidak ada sama sekali:
    ia lolos boot lalu gagal pada verifikasi pertama yang membutuhkannya. */
-const validated = schema.refine(
-  (c) => Boolean(c.JWT_PREVIOUS_PRIVATE_KEY) === Boolean(c.JWT_PREVIOUS_PUBLIC_KEY),
-  { message: 'harus diisi berpasangan', path: ['JWT_PREVIOUS_PRIVATE_KEY'] },
-);
+const validated = schema
+  .refine((c) => Boolean(c.JWT_PREVIOUS_PRIVATE_KEY) === Boolean(c.JWT_PREVIOUS_PUBLIC_KEY), {
+    message: 'harus diisi berpasangan',
+    path: ['JWT_PREVIOUS_PRIVATE_KEY'],
+  })
+  /* Alasan yang sama: endpoint tanpa kunci, atau kunci tanpa pengirim, akan
+     lolos boot lalu gagal pada email pertama — yang justru email verifikasi
+     pengguna pertama. */
+  .refine(
+    (c) =>
+      [c.MAIL_ENDPOINT, c.MAIL_API_KEY, c.MAIL_FROM].filter(Boolean).length % 3 === 0,
+    { message: 'harus diisi lengkap atau dikosongkan seluruhnya', path: ['MAIL_ENDPOINT'] },
+  );
 
 export type Config = Readonly<z.infer<typeof validated>>;
 

@@ -1,4 +1,4 @@
-name: kantongz-api
+name: kantongz
 
 services:
   postgres:
@@ -27,11 +27,36 @@ services:
       timeout: 3s
       retries: 10
 
+  # Migrasi berjalan sebagai proses TERPISAH yang selesai lalu keluar, bukan
+  # dari dalam `src/index.ts`. Penyebaran bergulir menjalankan banyak instans
+  # sekaligus, dan sepuluh instans yang masing-masing menerapkan migrasi saat
+  # boot akan berlomba di atas tabel yang sama.
+  migrate:
+    build: .
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: info
+      DATABASE_URL: postgres://kantongz:kantongz@postgres:5432/kantongz
+      REDIS_URL: redis://redis:6379
+      JWT_ISSUER: https://api.kantongz.id
+      JWT_AUDIENCE: kantongz-web
+      JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:?jalankan `npm run keys:generate` lalu ekspor}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:?jalankan `npm run keys:generate` lalu ekspor}
+      MASTER_KEY: ${MASTER_KEY:?jalankan `npm run keys:generate` lalu ekspor}
+      HMAC_KEY_VERSION: ${HMAC_KEY_VERSION:-1}
+    command: ['node', 'dist/platform/db/migrate.js']
+    restart: 'no'
+
   api:
     build: .
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
+      # API baru boleh hidup SESUDAH migrasi selesai dengan sukses. Tanpa syarat
+      # ini, permintaan pertama menemui tabel yang belum ada.
+      migrate: { condition: service_completed_successfully }
     environment:
       NODE_ENV: production
       LOG_LEVEL: info
@@ -40,7 +65,7 @@ services:
       DATABASE_URL: postgres://kantongz:kantongz@postgres:5432/kantongz
       REDIS_URL: redis://redis:6379
       JWT_ISSUER: https://api.kantongz.id
-      JWT_AUDIENCE: kantongz-mobile
+      JWT_AUDIENCE: kantongz-web
       # Rahasia TIDAK ditulis di berkas ini. Berkas compose ikut ter-commit;
       # `:?` membuat `docker compose up` berhenti dengan pesan yang jelas alih-alih
       # menjalankan API dengan kunci kosong.
@@ -50,6 +75,25 @@ services:
       HMAC_KEY_VERSION: ${HMAC_KEY_VERSION:-1}
     ports: ['3000:3000']
     # Meneruskan SIGTERM ke PID 1 supaya penutupan tertib benar-benar berjalan.
+    init: true
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ../kantongz-web
+      args:
+        # Dibaca saat build: Next.js memanggang variabel `NEXT_PUBLIC_*` ke
+        # dalam bundel klien, jadi nilainya harus ada sebelum `next build`.
+        NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:3000}
+    depends_on:
+      api: { condition: service_healthy }
+    environment:
+      NODE_ENV: production
+      # Dipakai rute BFF di dalam kontainer — nama layanan, bukan localhost.
+      API_URL: http://api:3000
+      PORT: '3100'
+      HOSTNAME: 0.0.0.0
+    ports: ['3100:3100']
     init: true
     restart: unless-stopped
 

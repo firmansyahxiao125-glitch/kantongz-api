@@ -57,9 +57,14 @@ function parse<T extends z.ZodType>(schema: T, body: unknown): z.infer<T> {
 }
 
 export interface RouteDeps extends AuthDeps {
-  /** Menyalurkan kode verifikasi ke antrean email. Di M3.7 ini menjadi outbox;
-   *  sampai saat itu ia mencatatnya sebagai peristiwa terstruktur. */
-  deliverCode: (to: string, purpose: 'verify' | 'reset', code: string) => Promise<void>;
+  /** Menyalurkan kode verifikasi ke antrean email (outbox, §7). `ticket`
+   *  menjadi kunci idempotensinya: satu tiket berhak atas tepat satu email. */
+  deliverCode: (
+    to: string,
+    purpose: 'verify' | 'reset',
+    code: string,
+    ticket: string,
+  ) => Promise<void>;
 }
 
 export function registerAuthRoutes(app: App, deps: RouteDeps): void {
@@ -78,7 +83,7 @@ export function registerAuthRoutes(app: App, deps: RouteDeps): void {
   app.post('/v1/auth/register', async (request, reply) => {
     const body = parse(schemas.register, request.body);
     const { code, ...pending } = await service.register(deps, body, ctxOf(request));
-    await deps.deliverCode(body.email, 'verify', code);
+    await deps.deliverCode(body.email, 'verify', code, pending.ticket);
     void reply.status(201).send(success(pending, request.requestId));
   });
 
@@ -99,7 +104,7 @@ export function registerAuthRoutes(app: App, deps: RouteDeps): void {
     const { code, ...pending } = await service.requestPasswordReset(deps, body.email, ctxOf(request));
     /* Kode hanya dikirim bila akunnya nyata. Tiket hantu tidak punya kode, dan
        tidak ada email yang berangkat ke alamat yang tidak terdaftar. */
-    if (code) await deps.deliverCode(body.email, 'reset', code);
+    if (code) await deps.deliverCode(body.email, 'reset', code, pending.ticket);
     void reply.send(success(pending, request.requestId));
   });
 

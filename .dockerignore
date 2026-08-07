@@ -1,0 +1,20 @@
+# Konteks build dikirim UTUH ke daemon sebelum satu instruksi pun berjalan.
+# Tanpa berkas ini, `COPY . .` menyalin node_modules, .git, dan — yang paling
+# berbahaya — .env berisi MASTER_KEY dan kunci privat penandatangan ke dalam
+# lapisan citra, tempat siapa pun yang menarik citranya dapat membacanya kembali.
+
+.env
+.env.*
+!.env.example
+
+node_modules
+dist
+.git
+.github
+coverage
+*.log
+
+# Berkas pengembangan yang tidak pernah dibutuhkan citra.
+.vscode
+.idea
+README.md

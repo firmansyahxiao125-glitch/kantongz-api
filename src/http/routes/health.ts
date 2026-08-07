@@ -1,5 +1,6 @@
 import { pingDatabase, type DbHandle } from '../../platform/db/client.js';
 import { pingRedis, type RedisHandle } from '../../platform/redis/client.js';
+import { stats as outboxStats } from '../../modules/outbox/index.js';
 import type { App } from '../types.js';
 import { success } from '../envelope.js';
 
@@ -60,6 +61,12 @@ export function registerHealthRoutes(app: App, deps: HealthDeps): void {
       runCheck('redis', () => pingRedis(deps.redis)),
     ]);
 
+    /* Kedalaman antrean dilaporkan di sini, bukan sebagai `check` yang bisa
+       gagal: outbox yang menumpuk BUKAN alasan mengeluarkan instans dari
+       penyeimbang beban — instans lain punya antrean yang sama persis. Ia
+       alasan membangunkan manusia, dan itu tugas pemantauan. */
+    const queue = await outboxStats(deps.db.db).catch(() => null);
+
     void reply.send(
       success(
         {
@@ -67,6 +74,7 @@ export function registerHealthRoutes(app: App, deps: HealthDeps): void {
           version: deps.version,
           uptimeSeconds: Math.floor((Date.now() - deps.startedAt) / 1000),
           checks,
+          outbox: queue,
         },
         request.requestId,
       ),

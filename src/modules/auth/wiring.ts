@@ -5,6 +5,7 @@ import type { Database } from '../../platform/db/client.js';
 import { createKeyProvider } from '../../platform/crypto/keys.js';
 import type { Logger } from '../../platform/observability/logger.js';
 import { keyRingFromPem, type PemKeyPair } from '../tokens/keys.js';
+import { enqueue } from '../outbox/index.js';
 import { registerAuthRoutes } from './routes.js';
 import type { AuthDeps } from './service.js';
 import type { App } from '../../http/types.js';
@@ -26,17 +27,27 @@ export interface AuthWiring {
 }
 
 /**
- * Penyaluran kode verifikasi.
+ * Penyaluran kode verifikasi lewat outbox. §7.
  *
- * M3.7 menggantikan ini dengan outbox transaksional. Sampai saat itu kode
- * dicatat sebagai peristiwa terstruktur — dan `code` TIDAK ikut tercatat,
- * karena `redact` di logger sudah menyensornya dan mencetaknya lewat jalur lain
- * akan membatalkan seluruh gunanya.
+ * Baris outbox, bukan panggilan langsung ke penyedia email. Panggilan langsung
+ * yang gagal meninggalkan akun yang terbuat tanpa email verifikasi terkirim —
+ * dan pengguna terjebak dengan akun yang tidak bisa diaktifkan dan tidak bisa
+ * didaftar ulang.
+ *
+ * `idempotencyKey` diturunkan dari tiketnya: satu tiket berhak atas tepat satu
+ * email, berapa kali pun jalur ini terpanggil ulang.
  */
-function logDelivery(logger: Logger) {
-  return (to: string, purpose: 'verify' | 'reset'): Promise<void> => {
-    logger.info({ purpose, recipient: to.slice(0, 1) }, 'kode verifikasi disalurkan');
-    return Promise.resolve();
+function outboxDelivery(db: Database, logger: Logger): DeliverCode {
+  return async (to, purpose, code, ticket) => {
+    await enqueue(
+      db,
+      purpose === 'verify' ? 'email.verify' : 'email.reset',
+      `${purpose}:${ticket}`,
+      { to, code },
+    );
+
+    /* Yang dicatat hanya bahwa sesuatu diantrekan. Alamat dan kodenya tidak. */
+    logger.info({ purpose }, 'kode diantrekan ke outbox');
   };
 }
 
@@ -79,6 +90,9 @@ export type DeliverCode = (
   to: string,
   purpose: 'verify' | 'reset',
   code: string,
+  /** Tiket yang menerbitkan kode ini. Menjadi kunci idempotensi outbox: satu
+   *  tiket berhak atas tepat satu email. */
+  ticket: string,
 ) => Promise<void>;
 
 export async function registerAuth(
@@ -90,6 +104,6 @@ export async function registerAuth(
 ): Promise<void> {
   registerAuthRoutes(app, {
     ...(await buildAuthDeps(deps)),
-    deliverCode: deliverCode ?? logDelivery(deps.logger),
+    deliverCode: deliverCode ?? outboxDelivery(deps.db, deps.logger),
   });
 }

@@ -1,0 +1,123 @@
+import type { EmailPayload, OutboxTopic } from './index.js';
+
+/**
+ * Penyedia email.
+ *
+ * Antarmuka ada sejak awal meski implementasi produksinya belum dipilih —
+ * menyisipkan SES atau Postmark ke dalam kode yang sudah memanggil `fetch`
+ * langsung di lima tempat jauh lebih mahal daripada menyediakan satu batas
+ * sekarang.
+ */
+
+export interface Mailer {
+  send: (message: {
+    to: string;
+    subject: string;
+    text: string;
+    /** Diteruskan ke penyedia. Pengiriman at-least-once tanpa ini menghasilkan
+     *  email ganda setiap kali penandaan `published_at` gagal. */
+    idempotencyKey: string;
+  }) => Promise<void>;
+}
+
+interface Template {
+  subject: string;
+  body: (payload: EmailPayload) => string;
+}
+
+/**
+ * Isi email.
+ *
+ * Bahasa Indonesia, tanpa merek berlebihan, dan tanpa satu pun tautan. Kode
+ * diketik pengguna di aplikasi yang sudah terbuka — email berisi tautan masuk
+ * adalah email yang melatih pengguna mengeklik tautan di email keuangan, dan
+ * pelatihan itulah yang dimanfaatkan phishing.
+ */
+const TEMPLATES: Record<OutboxTopic, Template> = {
+  'email.verify': {
+    subject: 'Kode verifikasi KANTONGZ',
+    body: (p) =>
+      [
+        `Halo${p.name ? ` ${p.name}` : ''},`,
+        '',
+        `Kode verifikasi akunmu: ${p.code ?? ''}`,
+        '',
+        'Berlaku 10 menit. Jangan bagikan kode ini kepada siapa pun, termasuk kepada orang yang mengaku dari KANTONGZ.',
+        '',
+        'Kalau kamu tidak mendaftar, abaikan email ini.',
+      ].join('\n'),
+  },
+  'email.reset': {
+    subject: 'Kode pemulihan sandi KANTONGZ',
+    body: (p) =>
+      [
+        `Halo${p.name ? ` ${p.name}` : ''},`,
+        '',
+        `Kode pemulihan sandimu: ${p.code ?? ''}`,
+        '',
+        'Berlaku 15 menit. Setelah sandi diganti, seluruh perangkat akan dikeluarkan.',
+        '',
+        'Kalau kamu tidak meminta pemulihan, abaikan email ini — sandimu tidak berubah.',
+      ].join('\n'),
+  },
+  'email.password_changed': {
+    subject: 'Kata sandi KANTONGZ diubah',
+    body: (p) =>
+      [
+        `Halo${p.name ? ` ${p.name}` : ''},`,
+        '',
+        'Kata sandi akunmu baru saja diubah, dan seluruh perangkat telah dikeluarkan.',
+        '',
+        'Kalau bukan kamu yang melakukannya, segera pulihkan akses dan hubungi kami.',
+      ].join('\n'),
+  },
+};
+
+export function render(topic: OutboxTopic, payload: EmailPayload): {
+  subject: string;
+  text: string;
+} {
+  const template = TEMPLATES[topic];
+  return { subject: template.subject, text: template.body(payload) };
+}
+
+/**
+ * Penyedia SMTP lewat HTTP API.
+ *
+ * Bentuk permintaannya sengaja generik — `to`, `subject`, `text` — karena itulah
+ * irisan yang sama di SES, Postmark, Resend, dan Mailgun. Yang berbeda antar
+ * penyedia hanya URL dan nama header kuncinya.
+ */
+export interface HttpMailerConfig {
+  endpoint: string;
+  apiKey: string;
+  from: string;
+}
+
+export function createHttpMailer(config: HttpMailerConfig): Mailer {
+  return {
+    send: async (message) => {
+      const response = await fetch(config.endpoint, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${config.apiKey}`,
+          'idempotency-key': message.idempotencyKey,
+        },
+        body: JSON.stringify({
+          from: config.from,
+          to: message.to,
+          subject: message.subject,
+          text: message.text,
+        }),
+      });
+
+      if (!response.ok) {
+        /* Badan respons TIDAK dibaca ke dalam pesan galat: sebagian penyedia
+           menggemakan kembali permintaannya, dan permintaannya memuat kode
+           verifikasi yang lalu berakhir di kolom `last_error`. */
+        throw new Error(`penyedia email menolak: HTTP ${String(response.status)}`);
+      }
+    },
+  };
+}
