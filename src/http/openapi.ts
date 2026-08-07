@@ -631,6 +631,42 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
           },
         },
 
+        Answer: {
+          type: 'object',
+          required: ['question', 'intent', 'answer', 'grounding', 'amount'],
+          additionalProperties: false,
+          description:
+            'Jawaban GROUNDED. Seluruh angka dihitung server dari basis data; model bahasa tidak pernah menghitung maupun memutuskan apa yang ditanyakan.',
+          properties: {
+            question: { type: 'string' },
+            intent: {
+              type: ['string', 'null'],
+              enum: [
+                'spend_total',
+                'income_total',
+                'spend_by_category',
+                'top_categories',
+                'balance',
+                'largest_expense',
+                'budget_status',
+                'subscriptions',
+                'runway',
+                'net_flow',
+                null,
+              ],
+              description:
+                'null berarti maksudnya tidak dikenali. Menebak menghasilkan angka yang benar untuk pertanyaan yang salah.',
+            },
+            answer: { type: 'string', description: 'Boleh ditampilkan apa adanya.' },
+            grounding: {
+              type: ['string', 'null'],
+              description:
+                'Dari mana angkanya. Inilah yang membedakan jawaban yang dapat diperiksa dari kalimat yang terdengar meyakinkan.',
+            },
+            amount: { type: ['integer', 'null'] },
+          },
+        },
+
         Empty: { type: 'object', additionalProperties: false },
       },
     },
@@ -1288,6 +1324,29 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
           responses: {
             '200': { description: 'ringkasan', content: json(envelope(ref('PeriodSummary'))) },
             ...errors('session_expired'),
+          },
+        },
+      },
+
+      '/v1/assistant/ask': {
+        post: {
+          tags: ['asisten'],
+          summary: 'Bertanya tentang data sendiri dengan bahasa biasa',
+          description:
+            'Maksud pertanyaan dikenali secara DETERMINISTIK, dan seluruh angka dihitung server. Model bahasa tidak pernah memutuskan apa yang ditanyakan maupun menghitung jawabannya. Pertanyaan di luar cakupan menjawab `intent: null` beserta daftar apa yang bisa ditanyakan — bukan angka yang benar untuk pertanyaan yang salah.',
+          security: SECURED,
+          requestBody: {
+            required: true,
+            content: json({
+              type: 'object',
+              required: ['question'],
+              additionalProperties: false,
+              properties: { question: { type: 'string', minLength: 3, maxLength: 300 } },
+            }),
+          },
+          responses: {
+            '200': { description: 'jawaban', content: json(envelope(ref('Answer'))) },
+            ...errors('invalid_input', 'session_expired'),
           },
         },
       },

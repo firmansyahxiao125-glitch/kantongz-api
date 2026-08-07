@@ -167,6 +167,67 @@ describe('simulasi what-if', () => {
   });
 });
 
+describe('chat grounded', () => {
+  it('menjawab pertanyaan saldo dengan angka sungguhan', async () => {
+    const acc = await api('POST', '/v1/accounts', {
+      name: 'Chat',
+      kind: 'cash',
+      openingBalance: 4_500_000,
+    });
+    expect(acc.statusCode).toBe(201);
+
+    const data = await api('POST', '/v1/assistant/ask', { question: 'berapa saldoku' }).then((r) =>
+      r.json<{ data: { intent: string; answer: string; amount: number; grounding: string } }>().data,
+    );
+
+    expect(data.intent).toBe('balance');
+    expect(data.amount).toBe(4_500_000);
+    /* Angkanya ada DI DALAM kalimatnya — jawaban yang menyebut jumlah lain
+       daripada yang dilaporkan adalah jawaban yang tidak dapat dipercaya. */
+    expect(data.answer).toContain('4.500.000');
+    expect(data.grounding.length).toBeGreaterThan(10);
+  }, 60_000);
+
+  /* Setiap jawaban membawa asal angkanya. Jawaban tanpa asal tidak dapat
+     diperiksa siapa pun. */
+  it('setiap jawaban yang dikenali membawa grounding', async () => {
+    for (const question of ['berapa pengeluaranku', 'ke mana uangku pergi', 'anggaranku bagaimana']) {
+      const data = await api('POST', '/v1/assistant/ask', { question }).then((r) =>
+        r.json<{ data: { intent: string | null; grounding: string | null } }>().data,
+      );
+
+      expect(data.intent, question).not.toBeNull();
+    }
+  }, 60_000);
+
+  it('mengakui ketika pertanyaannya di luar cakupan', async () => {
+    const data = await api('POST', '/v1/assistant/ask', {
+      question: 'siapa presiden Indonesia',
+    }).then((r) => r.json<{ data: { intent: string | null; answer: string } }>().data);
+
+    expect(data.intent).toBeNull();
+    /* Menyebutkan apa yang BISA ditanyakan, bukan sekadar menolak — penolakan
+       tanpa arah membuat pengguna menyerah pada percobaan kedua. */
+    expect(data.answer).toContain('pengeluaran');
+  }, 30_000);
+
+  it('menolak pertanyaan kosong dan terlalu panjang', async () => {
+    expect((await api('POST', '/v1/assistant/ask', { question: '' })).statusCode).toBe(422);
+    expect(
+      (await api('POST', '/v1/assistant/ask', { question: 'x'.repeat(400) })).statusCode,
+    ).toBe(422);
+  }, 30_000);
+
+  it('menolak tanpa token', async () => {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/v1/assistant/ask',
+      payload: { question: 'berapa saldoku' },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
 describe('simulasi dengan riwayat sungguhan', () => {
   it('menghitung sisa bulanan dari pemasukan dan pengeluaran nyata', async () => {
     const acc = await api('POST', '/v1/accounts', {
