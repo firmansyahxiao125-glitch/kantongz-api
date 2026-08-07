@@ -17,7 +17,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/platform/db/migrate.ts",
     "keys:generate": "node scripts/generate-keys.mjs",
-    "e2e": "bash scripts/e2e.sh"
+    "e2e": "bash scripts/e2e.sh",
+    "verify": "bash scripts/verify-standalone.sh"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",
