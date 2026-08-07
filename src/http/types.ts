@@ -12,6 +12,26 @@ import type { Logger } from '../platform/observability/logger.js';
  * persis. Satu alias di sini mencegah ketidakcocokan itu tersebar ke setiap
  * berkas rute.
  */
+/** Satu rute sebagaimana Fastify mendaftarkannya. */
+export interface RouteEntry {
+  method: string;
+  url: string;
+}
+
+declare module 'fastify' {
+  interface FastifyInstance {
+    /**
+     * Inventaris rute yang benar-benar terdaftar.
+     *
+     * Dikumpulkan lewat hook `onRoute`, bukan diurai dari `printRoutes` —
+     * keluaran `printRoutes` adalah pohon untuk manusia dan bentuknya berubah
+     * antar versi. Dipakai penjaga OpenAPI untuk memastikan dokumennya tidak
+     * menyimpang dari kenyataan.
+     */
+    routeInventory: RouteEntry[];
+  }
+}
+
 export type App = FastifyInstance<
   RawServerDefault,
   IncomingMessage,

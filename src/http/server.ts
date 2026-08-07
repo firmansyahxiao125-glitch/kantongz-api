@@ -7,8 +7,9 @@ import type { RedisHandle } from '../platform/redis/client.js';
 import { registerCors } from './middleware/cors.js';
 import { registerErrorHandler } from './middleware/errorHandler.js';
 import { generateRequestId, registerRequestId } from './middleware/requestId.js';
+import { registerOpenApi } from './openapi.js';
 import { registerHealthRoutes } from './routes/health.js';
-import type { App } from './types.js';
+import type { App, RouteEntry } from './types.js';
 
 export interface ServerDeps {
   config: Config;
@@ -36,9 +37,20 @@ export function buildServer(deps: ServerDeps): App {
     trustProxy: true,
   });
 
+  /* Dipasang SEBELUM rute mana pun didaftarkan — `onRoute` hanya melihat yang
+     datang sesudahnya. */
+  app.decorate('routeInventory', [] as RouteEntry[]);
+  app.addHook('onRoute', (route) => {
+    const methods = Array.isArray(route.method) ? route.method : [route.method];
+    for (const method of methods) {
+      app.routeInventory.push({ method: method.toLowerCase(), url: route.url });
+    }
+  });
+
   registerRequestId(app);
   registerCors(app, deps.config);
   registerErrorHandler(app);
+  registerOpenApi(app, deps.config.JWT_ISSUER);
   registerHealthRoutes(app, {
     db: deps.db,
     redis: deps.redis,
