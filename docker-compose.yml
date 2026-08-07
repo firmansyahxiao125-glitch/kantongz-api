@@ -94,11 +94,15 @@ services:
       # buku besar dari peramban dengan Bearer token; tanpa daftar ini setiap
       # panggilan itu diblokir peramban sebelum sempat berangkat.
       #
-      # 3100 = aplikasi web. 8081 = Metro, tempat aplikasi mobile dijalankan di
-      # React Native Web untuk verifikasi. Yang terakhir HANYA untuk lingkungan
-      # pengembangan ini — penyebaran produksi menyetel `CORS_ORIGINS` sendiri
-      # dan tidak mewarisi bawaan ini.
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3100,http://127.0.0.1:3100,http://localhost:8081,http://127.0.0.1:8081}
+      # 3100 = aplikasi web di dalam kontainer. 8081 = Metro, tempat aplikasi
+      # mobile dijalankan di React Native Web untuk verifikasi. 3001 = `next
+      # dev`, yang selalu mundur ke sana karena 3000 sudah dipakai API ini —
+      # tanpa entri itu, setiap pengembang baru menabrak dinding CORS pada
+      # permintaan pertamanya dan sangkaannya jatuh ke tempat yang salah.
+      #
+      # Seluruh daftar ini HANYA untuk lingkungan pengembangan — penyebaran
+      # produksi menyetel `CORS_ORIGINS` sendiri dan tidak mewarisi bawaan ini.
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3100,http://127.0.0.1:3100,http://localhost:8081,http://127.0.0.1:8081,http://localhost:3001,http://127.0.0.1:3001}
       # Email lewat Mailpit — lokal, tanpa akun, tanpa biaya. Ganti ke SMTP
       # penyedia sungguhan hanya dengan mengubah host dan kredensialnya.
       SMTP_HOST: mailpit
