@@ -92,6 +92,7 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
       { name: 'analitik', description: 'Arus kas dan ringkasan dasbor' },
       { name: 'wawasan', description: 'Anomali, langganan berulang, proyeksi arus kas' },
       { name: 'asisten', description: 'Ringkasan naratif dan simulasi what-if' },
+      { name: 'struk', description: 'Snap-Struk — foto struk menjadi rancangan transaksi' },
     ],
 
     components: {
@@ -601,6 +602,32 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
             reason: { type: 'string' },
             basisDays: { type: 'integer' },
             reliable: { type: 'boolean' },
+          },
+        },
+
+        ReceiptDraft: {
+          type: 'object',
+          required: ['merchant', 'total', 'occurredAt', 'confidence', 'totalLine'],
+          additionalProperties: false,
+          description:
+            'RANCANGAN, bukan transaksi. Pengguna selalu mengonfirmasi sebelum apa pun tersimpan — struk yang terbaca separuh menghasilkan angka yang terlihat sah.',
+          properties: {
+            merchant: { type: ['string', 'null'] },
+            total: {
+              type: ['integer', 'null'],
+              description: 'Rupiah UTUH. null berarti tidak ditemukan dengan yakin.',
+            },
+            occurredAt: { type: ['integer', 'null'], description: 'Epoch milidetik.' },
+            confidence: {
+              type: 'string',
+              enum: ['tinggi', 'sedang', 'rendah'],
+              description:
+                'Dinyatakan terbuka. Pengguna yang tidak diberi tahu keraguannya akan menyimpan angkanya tanpa memeriksa.',
+            },
+            totalLine: {
+              type: ['string', 'null'],
+              description: 'Baris yang menghasilkan totalnya, supaya dapat diperiksa pengguna.',
+            },
           },
         },
 
@@ -1286,6 +1313,28 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
           },
           responses: {
             '200': { description: 'simulasi', content: json(envelope(ref('Simulation'))) },
+            ...errors('invalid_input', 'session_expired'),
+          },
+        },
+      },
+
+      '/v1/receipts/scan': {
+        post: {
+          tags: ['struk'],
+          summary: 'Membaca foto struk menjadi rancangan transaksi',
+          description:
+            'OCR LOKAL lewat Tesseract — tanpa akun, tanpa biaya per gambar, dan tanpa satu pun foto struk meninggalkan mesin. Gambar dikirim mentah di badan permintaan, bukan multipart. Batas 8 MB; isi diperiksa dari tanda tangan berkas, bukan dari content-type.',
+          security: SECURED,
+          requestBody: {
+            required: true,
+            content: {
+              'image/jpeg': { schema: { type: 'string', format: 'binary' } },
+              'image/png': { schema: { type: 'string', format: 'binary' } },
+              'image/webp': { schema: { type: 'string', format: 'binary' } },
+            },
+          },
+          responses: {
+            '200': { description: 'rancangan', content: json(envelope(ref('ReceiptDraft'))) },
             ...errors('invalid_input', 'session_expired'),
           },
         },

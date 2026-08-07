@@ -8,6 +8,8 @@ import { registerAuth, type DeliverCode } from './modules/auth/wiring.js';
 import { registerLedger } from './modules/ledger/wiring.js';
 import { registerInsight } from './modules/insight/wiring.js';
 import { registerAssistant } from './modules/assistant/wiring.js';
+import { registerReceipt } from './modules/receipt/wiring.js';
+import type { ReceiptReader } from './modules/receipt/reader.js';
 import { seedSystemCategories } from './modules/ledger/seed.js';
 import { createHttpMailer, type Mailer } from './modules/outbox/mailer.js';
 import { createSmtpMailer } from './modules/outbox/smtp.js';
@@ -28,6 +30,8 @@ export interface Runtime {
   app: App;
   logger: Logger;
   outbox: WorkerHandle;
+  /** Pekerja OCR memegang instans WASM; ia dilepas saat penutupan. */
+  receipt: ReceiptReader;
 }
 
 /**
@@ -101,6 +105,7 @@ export async function bootstrap(
   await registerLedger(app, { config, db: db.db });
   await registerInsight(app, { config, db: db.db });
   await registerAssistant(app, { config, db: db.db, logger });
+  const receipt = await registerReceipt(app, { config, logger });
 
   /* Kategori bawaan ditanam saat boot, bukan lewat migrasi: migrasi menjalankan
      SQL, dan daftar ini hidup di TypeScript tempat ia dibaca dan diubah. */
@@ -118,7 +123,7 @@ export async function bootstrap(
     batchSize: config.OUTBOX_BATCH_SIZE,
   });
 
-  return { app, logger, outbox };
+  return { app, logger, outbox, receipt };
 }
 
 /**
@@ -154,6 +159,7 @@ export async function serve(
          pesan yang sudah terkirim tidak pernah tertandai. */
       runtime.outbox.stop();
       await app.close();
+      await runtime.receipt.close();
       await Promise.allSettled(closers.map((close) => close()));
       logger.info('penutupan selesai');
       process.exit(0);

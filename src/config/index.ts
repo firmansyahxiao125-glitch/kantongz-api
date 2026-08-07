@@ -131,6 +131,14 @@ const schema = z.object({
   ANTHROPIC_MODEL: z.string().min(1).default('claude-opus-5'),
 
   /**
+   * Bahasa OCR untuk Snap-Struk. ROADMAP M6.
+   *
+   * `ind+eng`: struk Indonesia memakai istilah kedua bahasa dalam satu lembar —
+   * "Total Bayar" dan "Cash" sering muncul bersebelahan.
+   */
+  OCR_LANGUAGES: z.string().min(2).default('ind+eng'),
+
+  /**
    * Asal yang boleh memanggil dari peramban, dipisahkan koma.
    *
    * DAFTAR IZIN, bukan `*`. Aplikasi web memanggil backend langsung dari
