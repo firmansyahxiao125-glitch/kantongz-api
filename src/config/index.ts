@@ -77,6 +77,26 @@ const schema = z.object({
   /** Jeda antar putaran pekerja outbox. */
   OUTBOX_INTERVAL_MS: z.coerce.number().int().min(200).max(60_000).default(2_000),
   OUTBOX_BATCH_SIZE: z.coerce.number().int().min(1).max(200).default(20),
+
+  /**
+   * Asal yang boleh memanggil dari peramban, dipisahkan koma.
+   *
+   * DAFTAR IZIN, bukan `*`. Aplikasi web memanggil backend langsung dari
+   * peramban dengan Bearer token; `*` berarti halaman mana pun di internet
+   * dapat membaca jawaban itu bila ia berhasil memperoleh tokennya.
+   *
+   * Kosong berarti TIDAK ADA asal peramban yang diizinkan — yang benar untuk
+   * penyebaran khusus-mobile, karena `fetch` native tidak tunduk pada CORS.
+   */
+  CORS_ORIGINS: z
+    .string()
+    .default('')
+    .transform((value) =>
+      value
+        .split(',')
+        .map((origin) => origin.trim())
+        .filter((origin) => origin.length > 0),
+    ),
 });
 
 /* Setengah pasangan kunci lama lebih berbahaya daripada tidak ada sama sekali:

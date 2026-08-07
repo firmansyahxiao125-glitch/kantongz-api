@@ -4,6 +4,7 @@ import type { Config } from '../config/index.js';
 import type { Logger } from '../platform/observability/logger.js';
 import type { DbHandle } from '../platform/db/client.js';
 import type { RedisHandle } from '../platform/redis/client.js';
+import { registerCors } from './middleware/cors.js';
 import { registerErrorHandler } from './middleware/errorHandler.js';
 import { generateRequestId, registerRequestId } from './middleware/requestId.js';
 import { registerHealthRoutes } from './routes/health.js';
@@ -36,6 +37,7 @@ export function buildServer(deps: ServerDeps): App {
   });
 
   registerRequestId(app);
+  registerCors(app, deps.config);
   registerErrorHandler(app);
   registerHealthRoutes(app, {
     db: deps.db,

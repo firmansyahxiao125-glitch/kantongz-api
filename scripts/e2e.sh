@@ -27,6 +27,17 @@ kode() {
 EMAIL="e2e$(date +%s%N | tail -c 8)@contoh.id"
 SANDI="kantongz-sandi-kuat"
 
+# Kesiapan ditunggu sebelum apa pun ditegaskan. `/readyz` yang menjawab 503 di
+# jendela boot BUKAN cacat — itu justru perilaku yang benar, dan penyeimbang
+# beban pun menunggu hal yang sama sebelum mengirim lalu lintas.
+printf 'menunggu kesiapan'
+for _ in $(seq 1 60); do
+  [ "$(curl -s -o /dev/null -w '%{http_code}' $API/readyz)" = "200" ] && break
+  printf '.'; sleep 1
+done
+printf '
+'
+
 sec "Infrastruktur"
 is "postgres sehat" "$(docker compose --env-file .env.docker ps postgres --format '{{.Health}}')" "healthy"
 is "redis sehat"    "$(docker compose --env-file .env.docker ps redis    --format '{{.Health}}')" "healthy"
@@ -141,7 +152,9 @@ F=$(curl -s -X POST "$WEB/api/auth/password/forgot" -H 'content-type: applicatio
 FT=$(echo "$F" | sed -n 's/.*"ticket":"\([^"]*\)".*/\1/p')
 FC=$(kode "reset:$FT")
 [ -n "$FC" ] && ok "kode pemulihan masuk outbox" || bad "outbox reset"
-HANTU=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$WEB/api/auth/password/forgot" -H 'content-type: application/json' -d '{"email":"tidak-ada@contoh.id"}')
+# Alamat unik per jalan: kuota pemulihan adalah 5 per jam PER ALAMAT (§12), dan
+# alamat tetap akan kehabisan kuota setelah lima kali skrip ini dijalankan.
+HANTU=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$WEB/api/auth/password/forgot" -H 'content-type: application/json' -d "{\"email\":\"hantu-$(date +%s%N | tail -c 9)@contoh.id\"}")
 is "email asing tetap 200 (tanpa enumerasi)" "$HANTU" "200"
 
 sec "Penguncian"
@@ -156,6 +169,20 @@ is "sandi BENAR tetap ditolak saat terkunci" "$LOCK" "429"
 sec "Keluar"
 is "sign-out" "$(curl -s -b "$JAR" -c "$JAR" -o /dev/null -w '%{http_code}' -X POST "$WEB/api/auth/sign-out" -H 'content-type: application/json' -d '{}')" "200"
 is "refresh sesudah keluar" "$(curl -s -b "$JAR" -o /dev/null -w '%{http_code}' -X POST "$WEB/api/auth/refresh" -H 'content-type: application/json' -d '{}')" "401"
+
+sec "CORS"
+# Kebijakan ini HANYA ditegakkan peramban; curl mengabaikannya. Yang diperiksa
+# di sini adalah apakah header-nya benar-benar dikirim — tanpanya panggilan
+# buku besar dari peramban diblokir sebelum sempat berangkat.
+CH=$(curl -s -D- -o /dev/null -H 'origin: http://localhost:3100' $API/v1/accounts | tr -d '
+')
+echo "$CH" | grep -qi 'access-control-allow-origin: http://localhost:3100' && ok "asal web diizinkan" || bad "CORS asal web"
+CA=$(curl -s -D- -o /dev/null -H 'origin: https://penyerang.contoh' $API/v1/accounts | tr -d '
+')
+echo "$CA" | grep -qi 'access-control-allow-origin' && bad "asal asing diizinkan" || ok "asal asing ditolak"
+PF=$(curl -s -D- -o /dev/null -X OPTIONS $API/v1/transactions   -H 'origin: http://localhost:3100' -H 'access-control-request-method: POST'   -H 'access-control-request-headers: authorization,content-type' | tr -d '
+')
+echo "$PF" | grep -qi 'access-control-allow-headers:.*authorization' && ok "preflight mengizinkan authorization" || bad "preflight"
 
 sec "Frontend"
 for p in / /masuk /daftar /pulihkan; do

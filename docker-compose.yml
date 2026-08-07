@@ -73,6 +73,10 @@ services:
       JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:?jalankan `npm run keys:generate` lalu ekspor}
       MASTER_KEY: ${MASTER_KEY:?jalankan `npm run keys:generate` lalu ekspor}
       HMAC_KEY_VERSION: ${HMAC_KEY_VERSION:-1}
+      # Asal peramban yang boleh memanggil langsung. Aplikasi web memanggil
+      # buku besar dari peramban dengan Bearer token; tanpa daftar ini setiap
+      # panggilan itu diblokir peramban sebelum sempat berangkat.
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3100,http://127.0.0.1:3100}
     ports: ['3000:3000']
     # Meneruskan SIGTERM ke PID 1 supaya penutupan tertib benar-benar berjalan.
     init: true
