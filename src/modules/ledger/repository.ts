@@ -255,7 +255,15 @@ export interface TransactionFilter {
   limit: number;
 }
 
-function filterConditions(userId: string, filter: TransactionFilter) {
+/**
+ * Diekspor UNTUK DIUJI.
+ *
+ * Cacat yang mendorongnya keluar dari lingkup modul adalah cacat yang tidak
+ * dapat dilihat lewat perilaku: parameter bertipe salah lolos di PGlite dan
+ * gagal di `postgres.js`. Yang harus diperiksa adalah BENTUK parameternya, dan
+ * itu hanya bisa dilihat dari luar.
+ */
+export function filterConditions(userId: string, filter: TransactionFilter) {
   const after = filter.cursor ? decodeCursor(filter.cursor) : null;
 
   return and(
@@ -281,9 +289,23 @@ function filterConditions(userId: string, filter: TransactionFilter) {
      * setara persis dengan `ORDER BY a DESC, b DESC`. Menulisnya sebagai
      * `a < x OR (a = x AND b < y)` benar juga, tetapi perencana tidak selalu
      * mengenalinya sebagai penelusuran indeks.
+     *
+     * Waktunya dikirim sebagai STRING ISO dengan cast eksplisit, bukan sebagai
+     * `Date`.
+     *
+     * Di dalam fragmen `sql` mentah, drizzle tidak tahu kolom apa yang sedang
+     * dibandingkan, jadi ia tidak dapat memakai pemeta tipe kolom dan
+     * meneruskan nilainya apa adanya ke driver. `postgres.js` lalu mencoba
+     * menuliskan `Date` sebagai string dan gagal dengan ERR_INVALID_ARG_TYPE —
+     * setiap permintaan halaman kedua menjadi 500.
+     *
+     * Uji TIDAK menangkapnya: uji berjalan di atas PGlite, yang serialisasi
+     * parameternya menerima `Date`. Perbedaannya ada di DRIVER, bukan di
+     * PostgreSQL-nya, dan karena itu tidak terlihat sampai kueri yang sama
+     * dijalankan lewat driver produksi.
      */
     after
-      ? sql`(${transactions.occurredAt}, ${transactions.id}) < (${after.at}, ${after.id})`
+      ? sql`(${transactions.occurredAt}, ${transactions.id}) < (${after.at.toISOString()}::timestamptz, ${after.id})`
       : undefined,
   );
 }

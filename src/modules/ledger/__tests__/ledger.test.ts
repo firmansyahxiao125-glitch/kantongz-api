@@ -12,6 +12,8 @@ import type {
 } from '../../../contracts/ledger.js';
 import type { Session } from '../../../contracts/auth.js';
 import { DEVICE, createHarness, type Harness } from '../../auth/__tests__/harness.js';
+import { transactions } from '../../../platform/db/ledger.js';
+import { filterConditions } from '../repository.js';
 
 /**
  * Uji integrasi buku besar terhadap PostgreSQL sungguhan.
@@ -296,6 +298,30 @@ describe('transaksi', () => {
     const ids = new Set(satu.items.map((t) => t.id));
     expect(dua.items.some((t) => ids.has(t.id))).toBe(false);
   }, 60_000);
+
+  it('tidak pernah mengirim Date mentah sebagai parameter kursor', () => {
+    /*
+     * REGRESI. Halaman kedua mengembalikan 500 di produksi sementara uji di
+     * atas ini hijau.
+     *
+     * Sebabnya: di dalam fragmen `sql` mentah, drizzle tidak tahu kolom apa
+     * yang dibandingkan, jadi ia meneruskan nilainya apa adanya ke driver.
+     * PGlite menerima `Date`; `postgres.js` tidak, dan gagal dengan
+     * ERR_INVALID_ARG_TYPE.
+     *
+     * Perbedaannya ada di DRIVER, bukan di PostgreSQL-nya — jadi tidak ada uji
+     * perilaku di atas PGlite yang bisa menangkapnya. Yang dapat diperiksa
+     * adalah BENTUK parameternya, dan itu sama pada driver mana pun.
+     */
+    const kondisi = filterConditions('usr_contoh', {
+      cursor: `${String(Date.now())}.trx_contoh`,
+      limit: 10,
+    });
+
+    const { params } = h.db.select().from(transactions).where(kondisi).toSQL();
+
+    expect(params.some((p) => p instanceof Date)).toBe(false);
+  });
 
   it('menyaring berdasarkan jenis', async () => {
     const page = await data<TransactionPage>(api(bob, 'GET', '/v1/transactions?kind=income'));
