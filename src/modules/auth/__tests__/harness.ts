@@ -12,6 +12,7 @@ import { buildServer } from '../../../http/server.js';
 import { registerAuthRoutes } from '../routes.js';
 import { buildAuthDeps } from '../wiring.js';
 import { registerLedger } from '../../ledger/wiring.js';
+import { registerInsight } from '../../insight/wiring.js';
 import { seedSystemCategories } from '../../ledger/seed.js';
 import type { App } from '../../../http/types.js';
 
@@ -186,6 +187,7 @@ export async function createHarness(): Promise<Harness> {
   /* Buku besar dirakit lewat jalur produksi apa adanya — tidak ada seam yang
      perlu diganti di sana, jadi tidak ada yang boleh diganti. */
   await registerLedger(app, { config, db });
+  await registerInsight(app, { config, db });
   await seedSystemCategories(db);
 
   await app.ready();

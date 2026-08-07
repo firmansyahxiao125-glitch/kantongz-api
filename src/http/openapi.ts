@@ -90,6 +90,7 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
       { name: 'transaksi', description: 'Pencatatan pemasukan, pengeluaran, dan transfer' },
       { name: 'rencana', description: 'Anggaran dan tujuan menabung' },
       { name: 'analitik', description: 'Arus kas dan ringkasan dasbor' },
+      { name: 'wawasan', description: 'Anomali, langganan berulang, proyeksi arus kas' },
     ],
 
     components: {
@@ -400,6 +401,134 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
             topCategories: { type: 'array', items: ref('CategoryBreakdown') },
             budgets: { type: 'array', items: ref('Budget') },
             goals: { type: 'array', items: ref('Goal') },
+          },
+        },
+
+        Insight: {
+          type: 'object',
+          required: [
+            'id',
+            'kind',
+            'severity',
+            'title',
+            'body',
+            'reason',
+            'amount',
+            'transactionId',
+            'categoryId',
+          ],
+          additionalProperties: false,
+          properties: {
+            id: { type: 'string' },
+            kind: {
+              type: 'string',
+              enum: [
+                'anomaly',
+                'ghost_subscription',
+                'budget_risk',
+                'cashflow_risk',
+                'weekly_summary',
+              ],
+            },
+            severity: { type: 'string', enum: ['info', 'warning', 'critical'] },
+            title: { type: 'string' },
+            body: { type: 'string', description: 'Boleh ditampilkan apa adanya.' },
+            reason: {
+              type: 'string',
+              description:
+                'MENGAPA wawasan ini muncul, dalam angka. Wawasan tanpa ini adalah tebakan yang menyamar sebagai analisis.',
+            },
+            amount: { type: ['integer', 'null'] },
+            transactionId: { type: ['string', 'null'] },
+            categoryId: { type: ['string', 'null'] },
+          },
+        },
+
+        CashflowProjection: {
+          type: 'object',
+          required: [
+            'startingBalance',
+            'dailyNet',
+            'points',
+            'basisDays',
+            'reliable',
+            'daysUntilEmpty',
+          ],
+          additionalProperties: false,
+          properties: {
+            startingBalance: { type: 'integer' },
+            dailyNet: { type: 'integer' },
+            points: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['horizonDays', 'expected', 'low', 'high'],
+                additionalProperties: false,
+                properties: {
+                  horizonDays: { type: 'integer' },
+                  expected: { type: 'integer' },
+                  low: { type: 'integer' },
+                  high: { type: 'integer' },
+                },
+              },
+            },
+            basisDays: { type: 'integer' },
+            reliable: {
+              type: 'boolean',
+              description:
+                'false berarti datanya belum cukup — bukan proyeksi dengan pita selebar samudra yang tetap ditampilkan.',
+            },
+            daysUntilEmpty: {
+              type: ['integer', 'null'],
+              description: 'null berarti saldo tidak sedang menuju nol.',
+            },
+          },
+        },
+
+        RecurringCharge: {
+          type: 'object',
+          required: [
+            'merchant',
+            'amount',
+            'intervalDays',
+            'occurrences',
+            'lastChargedAt',
+            'monthlyCost',
+            'dormant',
+          ],
+          additionalProperties: false,
+          properties: {
+            merchant: { type: 'string' },
+            amount: { type: 'integer' },
+            intervalDays: { type: 'integer' },
+            occurrences: { type: 'integer' },
+            lastChargedAt: { type: 'integer' },
+            monthlyCost: { type: 'integer' },
+            dormant: { type: 'boolean' },
+          },
+        },
+
+        InsightDigest: {
+          type: 'object',
+          required: ['generatedAt', 'insights', 'projection', 'recurring'],
+          additionalProperties: false,
+          properties: {
+            generatedAt: { type: 'integer' },
+            insights: { type: 'array', items: ref('Insight') },
+            projection: ref('CashflowProjection'),
+            recurring: { type: 'array', items: ref('RecurringCharge') },
+          },
+        },
+
+        CategorySuggestion: {
+          type: 'object',
+          required: ['transactionId', 'categoryId', 'categoryName', 'reason'],
+          additionalProperties: false,
+          properties: {
+            transactionId: { type: 'string' },
+            categoryId: { type: 'string' },
+            categoryName: { type: 'string' },
+            reason: { type: 'string' },
           },
         },
 
@@ -989,6 +1118,63 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
               content: json(envelope({ type: 'array', items: ref('CashflowPoint') })),
             },
             ...errors('invalid_input', 'session_expired'),
+          },
+        },
+      },
+
+      '/v1/insights': {
+        get: {
+          tags: ['wawasan'],
+          summary: 'Anomali, langganan hantu, risiko anggaran, dan proyeksi arus kas',
+          description:
+            'SELURUHNYA deterministik — tidak ada model, tidak ada panggilan jaringan. Setiap wawasan membawa `reason` berisi angka yang mendasarinya.',
+          security: SECURED,
+          responses: {
+            '200': { description: 'ringkasan wawasan', content: json(envelope(ref('InsightDigest'))) },
+            ...errors('session_expired'),
+          },
+        },
+      },
+
+      '/v1/insights/suggestions': {
+        get: {
+          tags: ['wawasan'],
+          summary: 'Usulan kategori untuk transaksi yang belum berkategori',
+          description:
+            'Berbasis aturan, deterministik, dan dapat dijelaskan. Yang tidak cocok TIDAK diusulkan — menebak menghasilkan kategori salah dengan percaya diri, dan pengguna tidak akan memeriksanya.',
+          security: SECURED,
+          responses: {
+            '200': {
+              description: 'usulan',
+              content: json(envelope({ type: 'array', items: ref('CategorySuggestion') })),
+            },
+            ...errors('session_expired'),
+          },
+        },
+      },
+
+      '/v1/insights/suggestions/apply': {
+        post: {
+          tags: ['wawasan'],
+          summary: 'Menerapkan satu usulan kategori',
+          description:
+            'Eksplisit dan satu per satu, bukan otomatis di latar belakang. Kategorisasi yang berubah sendiri membuat laporan bulan lalu berbeda setiap kali dibuka.',
+          security: SECURED,
+          requestBody: {
+            required: true,
+            content: json({
+              type: 'object',
+              required: ['transactionId', 'categoryId'],
+              additionalProperties: false,
+              properties: {
+                transactionId: { type: 'string' },
+                categoryId: { type: 'string' },
+              },
+            }),
+          },
+          responses: {
+            '200': { description: 'diterapkan', content: json(envelope(ref('Empty'))) },
+            ...errors('not_found', 'invalid_input', 'session_expired'),
           },
         },
       },

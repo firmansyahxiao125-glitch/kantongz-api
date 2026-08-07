@@ -6,6 +6,7 @@ import { createLogger, type Logger } from './platform/observability/logger.js';
 import type { RedisHandle } from './platform/redis/client.js';
 import { registerAuth, type DeliverCode } from './modules/auth/wiring.js';
 import { registerLedger } from './modules/ledger/wiring.js';
+import { registerInsight } from './modules/insight/wiring.js';
 import { seedSystemCategories } from './modules/ledger/seed.js';
 import { createHttpMailer, type Mailer } from './modules/outbox/mailer.js';
 import { startWorker, type WorkerHandle } from './modules/outbox/worker.js';
@@ -73,6 +74,7 @@ export async function bootstrap(
   const app = buildServer({ config, logger, db, redis, version: VERSION });
   await registerAuth(app, { config, db: db.db, redis: redis.redis, logger }, deliverCode);
   await registerLedger(app, { config, db: db.db });
+  await registerInsight(app, { config, db: db.db });
 
   /* Kategori bawaan ditanam saat boot, bukan lewat migrasi: migrasi menjalankan
      SQL, dan daftar ini hidup di TypeScript tempat ia dibaca dan diubah. */
