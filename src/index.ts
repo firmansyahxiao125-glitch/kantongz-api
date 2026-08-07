@@ -3,6 +3,7 @@ import { createDatabase } from './platform/db/client.js';
 import { createLogger } from './platform/observability/logger.js';
 import { createRedis } from './platform/redis/client.js';
 import { buildServer } from './http/server.js';
+import { registerAuth } from './modules/auth/wiring.js';
 
 const VERSION = '0.1.0';
 
@@ -25,6 +26,7 @@ async function main(): Promise<void> {
   const redis = createRedis(config);
 
   const app = buildServer({ config, logger, db, redis, version: VERSION });
+  await registerAuth(app, { config, db: db.db, redis: redis.redis, logger });
 
   let shuttingDown = false;
 

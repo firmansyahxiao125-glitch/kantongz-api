@@ -5,7 +5,7 @@ import type { Logger } from '../platform/observability/logger.js';
 import type { DbHandle } from '../platform/db/client.js';
 import type { RedisHandle } from '../platform/redis/client.js';
 import { registerErrorHandler } from './middleware/errorHandler.js';
-import { registerRequestId } from './middleware/requestId.js';
+import { generateRequestId, registerRequestId } from './middleware/requestId.js';
 import { registerHealthRoutes } from './routes/health.js';
 import type { App } from './types.js';
 
@@ -30,9 +30,8 @@ export function buildServer(deps: ServerDeps): App {
     loggerInstance: deps.logger,
     /* Batas 16 KB pada seluruh rute. M3_SPEC §2. */
     bodyLimit: 16 * 1024,
-    /* Fastify tidak boleh membuat sendiri — kita sudah punya di `requestId`. */
-    genReqId: () => '',
-    disableRequestLogging: false,
+    /* Satu id, dipakai bersama oleh log bawaan Fastify dan log kita sendiri. */
+    genReqId: generateRequestId,
     trustProxy: true,
   });
 

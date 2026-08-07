@@ -41,6 +41,13 @@ services:
       REDIS_URL: redis://redis:6379
       JWT_ISSUER: https://api.kantongz.id
       JWT_AUDIENCE: kantongz-mobile
+      # Rahasia TIDAK ditulis di berkas ini. Berkas compose ikut ter-commit;
+      # `:?` membuat `docker compose up` berhenti dengan pesan yang jelas alih-alih
+      # menjalankan API dengan kunci kosong.
+      JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:?jalankan `npm run keys:generate` lalu ekspor}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:?jalankan `npm run keys:generate` lalu ekspor}
+      MASTER_KEY: ${MASTER_KEY:?jalankan `npm run keys:generate` lalu ekspor}
+      HMAC_KEY_VERSION: ${HMAC_KEY_VERSION:-1}
     ports: ['3000:3000']
     # Meneruskan SIGTERM ke PID 1 supaya penutupan tertib benar-benar berjalan.
     init: true

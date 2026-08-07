@@ -45,6 +45,6 @@ export interface PendingVerification {
 export interface DeviceInfo {
   deviceId: string;
   platform: 'ios' | 'android' | 'web';
-  model?: string;
-  appVersion?: string;
+  model?: string | undefined;
+  appVersion?: string | undefined;
 }

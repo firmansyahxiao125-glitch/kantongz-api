@@ -11,6 +11,19 @@ import { z } from 'zod';
  * Tidak ada nilai bawaan untuk rahasia. Bawaan hanya diberikan pada hal yang
  * aman bila salah: port, tingkat log, ukuran pool.
  */
+/**
+ * PEM di dalam variabel lingkungan.
+ *
+ * Orkestrator, berkas `.env`, dan manajer rahasia menyampaikan baris baru dengan
+ * cara yang berbeda-beda; sebagian meneruskan `\n` harfiah. Normalisasi di satu
+ * tempat mencegah kegagalan impor kunci yang pesannya tidak menyebut sebabnya.
+ */
+const pem = z
+  .string()
+  .min(1)
+  .transform((value) => value.replaceAll(String.raw`\n`, String.fromCharCode(10)).trim())
+  .refine((value) => value.startsWith('-----BEGIN'), 'bukan PEM');
+
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
@@ -25,12 +38,41 @@ const schema = z.object({
 
   JWT_ISSUER: z.string().url(),
   JWT_AUDIENCE: z.string().min(1),
+
+  /**
+   * Kunci penandatangan access token, PKCS#8 dan SPKI. §4.3.
+   *
+   * Membangkitkan pasangan kunci saat boot akan membuat setiap instans
+   * menandatangani dengan `kid` yang berlainan, dan penyebaran bergulir akan
+   * membatalkan token yang baru saja diterbitkan instans tetangganya.
+   */
+  JWT_PRIVATE_KEY: pem,
+  JWT_PUBLIC_KEY: pem,
+
+  /** Pasangan sebelumnya, hidup selama masa tumpang tindih rotasi. §4.3 —
+   *  token lama harus tetap terverifikasi sampai kedaluwarsa. */
+  JWT_PREVIOUS_PRIVATE_KEY: pem.optional(),
+  JWT_PREVIOUS_PUBLIC_KEY: pem.optional(),
+
+  /** Rahasia induk untuk HMAC pencarian, enkripsi kolom, dan tiket hantu. §7.
+   *  Di produksi berkas ini hanya memegang penunjuk KMS-nya. */
+  MASTER_KEY: z.string().min(32),
+  /** Naik satu setiap rotasi kunci HMAC. Baris lama tetap terbaca lewat
+   *  `hmac_key_version` miliknya sendiri. §7.1 */
+  HMAC_KEY_VERSION: z.coerce.number().int().min(1).default(1),
 });
 
-export type Config = Readonly<z.infer<typeof schema>>;
+/* Setengah pasangan kunci lama lebih berbahaya daripada tidak ada sama sekali:
+   ia lolos boot lalu gagal pada verifikasi pertama yang membutuhkannya. */
+const validated = schema.refine(
+  (c) => Boolean(c.JWT_PREVIOUS_PRIVATE_KEY) === Boolean(c.JWT_PREVIOUS_PUBLIC_KEY),
+  { message: 'harus diisi berpasangan', path: ['JWT_PREVIOUS_PRIVATE_KEY'] },
+);
+
+export type Config = Readonly<z.infer<typeof validated>>;
 
 export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
-  const parsed = schema.safeParse(source);
+  const parsed = validated.safeParse(source);
 
   if (!parsed.success) {
     /* Nilai TIDAK ikut dicetak — variabel lingkungan memuat rahasia, dan pesan

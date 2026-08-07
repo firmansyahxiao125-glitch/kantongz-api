@@ -35,15 +35,15 @@ export type AuditEvent =
 export interface AuditEntry {
   event: AuditEvent;
   severity: AuditSeverity;
-  actorId?: string | null;
-  actorType?: 'user' | 'system' | 'staff';
-  targetType?: string | null;
-  targetId?: string | null;
-  deviceId?: string | null;
-  ip?: string | null;
-  userAgent?: string | null;
+  actorId?: string | null | undefined;
+  actorType?: 'user' | 'system' | 'staff' | undefined;
+  targetType?: string | null | undefined;
+  targetId?: string | null | undefined;
+  deviceId?: string | null | undefined;
+  ip?: string | null | undefined;
+  userAgent?: string | null | undefined;
   requestId: string;
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, unknown> | undefined;
 }
 
 /**
