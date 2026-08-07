@@ -27,6 +27,22 @@ services:
       timeout: 3s
       retries: 10
 
+  # SMTP lokal. Menangkap seluruh email tanpa pernah mengirimkannya keluar, dan
+  # menampilkannya di antarmuka web di :8025. Tanpa akun, tanpa biaya, dan tanpa
+  # risiko email uji mendarat di kotak masuk orang sungguhan.
+  mailpit:
+    image: axllent/mailpit:latest
+    ports: ['1025:1025', '8025:8025']
+    environment:
+      MP_MAX_MESSAGES: '500'
+      MP_SMTP_AUTH_ACCEPT_ANY: '1'
+      MP_SMTP_AUTH_ALLOW_INSECURE: '1'
+    healthcheck:
+      test: ['CMD', '/mailpit', 'readyz']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   # Migrasi berjalan sebagai proses TERPISAH yang selesai lalu keluar, bukan
   # dari dalam `src/index.ts`. Penyebaran bergulir menjalankan banyak instans
   # sekaligus, dan sepuluh instans yang masing-masing menerapkan migrasi saat
@@ -54,6 +70,7 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
+      mailpit: { condition: service_healthy }
       # API baru boleh hidup SESUDAH migrasi selesai dengan sukses. Tanpa syarat
       # ini, permintaan pertama menemui tabel yang belum ada.
       migrate: { condition: service_completed_successfully }
@@ -82,6 +99,18 @@ services:
       # pengembangan ini — penyebaran produksi menyetel `CORS_ORIGINS` sendiri
       # dan tidak mewarisi bawaan ini.
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3100,http://127.0.0.1:3100,http://localhost:8081,http://127.0.0.1:8081}
+      # Email lewat Mailpit — lokal, tanpa akun, tanpa biaya. Ganti ke SMTP
+      # penyedia sungguhan hanya dengan mengubah host dan kredensialnya.
+      SMTP_HOST: mailpit
+      SMTP_PORT: '1025'
+      MAIL_FROM: ${MAIL_FROM:-noreply@kantongz.id}
+      # Model LOKAL. `host.docker.internal` menunjuk Ollama yang berjalan di
+      # mesin pengembang, bukan di dalam kontainer — model bahasa di dalam
+      # kontainer akan mengunduh ulang bobotnya pada setiap build.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     ports: ['3000:3000']
     # Meneruskan SIGTERM ke PID 1 supaya penutupan tertib benar-benar berjalan.
     init: true

@@ -7,8 +7,10 @@ import type { RedisHandle } from './platform/redis/client.js';
 import { registerAuth, type DeliverCode } from './modules/auth/wiring.js';
 import { registerLedger } from './modules/ledger/wiring.js';
 import { registerInsight } from './modules/insight/wiring.js';
+import { registerAssistant } from './modules/assistant/wiring.js';
 import { seedSystemCategories } from './modules/ledger/seed.js';
 import { createHttpMailer, type Mailer } from './modules/outbox/mailer.js';
+import { createSmtpMailer } from './modules/outbox/smtp.js';
 import { startWorker, type WorkerHandle } from './modules/outbox/worker.js';
 
 /**
@@ -37,7 +39,30 @@ export interface Runtime {
  * memang tidak ada yang bisa berangkat.
  */
 function mailerFor(config: Config, logger: Logger): Mailer {
-  if (config.MAIL_ENDPOINT && config.MAIL_API_KEY && config.MAIL_FROM) {
+  /*
+   * URUTANNYA ADALAH KEBIJAKAN:
+   *
+   *   1. SMTP — BAWAAN. Mailpit menyediakannya lokal tanpa akun; Gmail
+   *      menerimanya dengan sandi aplikasi. Tidak ada langganan yang dibayar
+   *      untuk mengirim satu email verifikasi.
+   *   2. Penyedia HTTP — adaptor OPSIONAL, hanya bila sengaja dipasang.
+   *   3. Catat-saja — selalu ada, dan mengatakan dirinya di log saat boot.
+   */
+  if (config.SMTP_HOST) {
+    logger.info({ host: config.SMTP_HOST, port: config.SMTP_PORT }, 'email lewat SMTP');
+    return createSmtpMailer({
+      host: config.SMTP_HOST,
+      port: config.SMTP_PORT,
+      from: config.MAIL_FROM,
+      user: config.SMTP_USER,
+      password: config.SMTP_PASSWORD,
+      secure: config.SMTP_SECURE,
+      timeoutMs: config.SMTP_TIMEOUT_MS,
+    });
+  }
+
+  if (config.MAIL_ENDPOINT && config.MAIL_API_KEY) {
+    logger.info('email lewat penyedia HTTP');
     return createHttpMailer({
       endpoint: config.MAIL_ENDPOINT,
       apiKey: config.MAIL_API_KEY,
@@ -46,7 +71,7 @@ function mailerFor(config: Config, logger: Logger): Mailer {
   }
 
   logger.warn(
-    'MAIL_ENDPOINT belum diisi — pekerja outbox berjalan dalam mode catat-saja, tidak ada email yang berangkat',
+    'SMTP_HOST belum diisi — pekerja outbox berjalan dalam mode catat-saja, tidak ada email yang berangkat',
   );
 
   return {
@@ -75,6 +100,7 @@ export async function bootstrap(
   await registerAuth(app, { config, db: db.db, redis: redis.redis, logger }, deliverCode);
   await registerLedger(app, { config, db: db.db });
   await registerInsight(app, { config, db: db.db });
+  await registerAssistant(app, { config, db: db.db, logger });
 
   /* Kategori bawaan ditanam saat boot, bukan lewat migrasi: migrasi menjalankan
      SQL, dan daftar ini hidup di TypeScript tempat ia dibaca dan diubah. */

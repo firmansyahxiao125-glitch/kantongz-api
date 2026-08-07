@@ -70,13 +70,65 @@ const schema = z.object({
    * yang menunjukkan antrean menumpuk kalau seseorang lupa mengisinya di
    * produksi.
    */
+  /**
+   * SMTP. Penyedia email BAWAAN.
+   *
+   * Mailpit di Docker Compose menyediakannya secara lokal tanpa akun apa pun,
+   * dan Gmail menerimanya dengan sandi aplikasi. Tidak ada langganan yang perlu
+   * dibayar untuk mengirim satu email verifikasi.
+   *
+   * Kosong berarti pekerja outbox berjalan dalam mode CATAT SAJA: pesan tetap
+   * diantrekan dan tetap ditandai terkirim, tetapi tidak ada yang berangkat.
+   */
+  SMTP_HOST: z.string().min(1).optional(),
+  SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(1025),
+  SMTP_USER: z.string().min(1).optional(),
+  SMTP_PASSWORD: z.string().min(1).optional(),
+  SMTP_SECURE: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+  SMTP_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(10_000),
+
+  /** Alamat pengirim. Dipakai SMTP maupun penyedia HTTP. */
+  MAIL_FROM: z.string().email().default('noreply@kantongz.id'),
+
+  /**
+   * Penyedia email lewat HTTP. Adaptor OPSIONAL, tidak pernah bawaan.
+   *
+   * Diperiksa hanya setelah SMTP terbukti tidak dikonfigurasi.
+   */
   MAIL_ENDPOINT: z.string().url().optional(),
   MAIL_API_KEY: z.string().min(1).optional(),
-  MAIL_FROM: z.string().email().optional(),
 
   /** Jeda antar putaran pekerja outbox. */
   OUTBOX_INTERVAL_MS: z.coerce.number().int().min(200).max(60_000).default(2_000),
   OUTBOX_BATCH_SIZE: z.coerce.number().int().min(1).max(200).default(20),
+
+  /**
+   * Model LOKAL lewat Ollama. Penyedia BAWAAN untuk M11 dan M13.
+   *
+   * Tanpa akun, tanpa biaya berulang, dan tanpa satu pun byte data keuangan
+   * meninggalkan mesin pengguna — yang terakhir bukan efek samping, sebab
+   * riwayat transaksi adalah data pribadi menurut UU PDP.
+   *
+   * Model bawaannya kecil dengan sengaja: `llama3.2:3b` muat di 4 GB RAM dan
+   * berjalan di CPU. Ringkasan dua kalimat tidak menuntut lebih.
+   */
+  OLLAMA_BASE_URL: z.string().url().default('http://localhost:11434'),
+  OLLAMA_MODEL: z.string().min(1).default('llama3.2:3b'),
+  /** Inferensi CPU bisa memakan puluhan detik. Permintaan yang menggantung
+   *  lebih buruk daripada ringkasan bertemplat. */
+  OLLAMA_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(30_000),
+
+  /**
+   * Penyedia awan. Adaptor OPSIONAL, tidak pernah bawaan.
+   *
+   * Diperiksa hanya setelah Ollama terbukti tidak ada. Ketiadaannya bukan
+   * kegagalan, dan seluruh lapisan asisten tetap berjalan tanpanya.
+   */
+  ANTHROPIC_API_KEY: z.string().min(1).optional(),
+  ANTHROPIC_MODEL: z.string().min(1).default('claude-opus-5'),
 
   /**
    * Asal yang boleh memanggil dari peramban, dipisahkan koma.
@@ -106,14 +158,18 @@ const validated = schema
     message: 'harus diisi berpasangan',
     path: ['JWT_PREVIOUS_PRIVATE_KEY'],
   })
-  /* Alasan yang sama: endpoint tanpa kunci, atau kunci tanpa pengirim, akan
-     lolos boot lalu gagal pada email pertama — yang justru email verifikasi
-     pengguna pertama. */
-  .refine(
-    (c) =>
-      [c.MAIL_ENDPOINT, c.MAIL_API_KEY, c.MAIL_FROM].filter(Boolean).length % 3 === 0,
-    { message: 'harus diisi lengkap atau dikosongkan seluruhnya', path: ['MAIL_ENDPOINT'] },
-  );
+  /* Alasan yang sama: endpoint tanpa kunci akan lolos boot lalu gagal pada
+     email pertama — yang justru email verifikasi pengguna pertama. */
+  .refine((c) => Boolean(c.MAIL_ENDPOINT) === Boolean(c.MAIL_API_KEY), {
+    message: 'harus diisi berpasangan',
+    path: ['MAIL_ENDPOINT'],
+  })
+  /* Sandi tanpa pengguna, atau sebaliknya, berarti AUTH yang tidak pernah
+     berjalan pada server yang menuntutnya. */
+  .refine((c) => Boolean(c.SMTP_USER) === Boolean(c.SMTP_PASSWORD), {
+    message: 'harus diisi berpasangan',
+    path: ['SMTP_USER'],
+  });
 
 export type Config = Readonly<z.infer<typeof validated>>;
 

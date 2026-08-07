@@ -91,6 +91,7 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
       { name: 'rencana', description: 'Anggaran dan tujuan menabung' },
       { name: 'analitik', description: 'Arus kas dan ringkasan dasbor' },
       { name: 'wawasan', description: 'Anomali, langganan berulang, proyeksi arus kas' },
+      { name: 'asisten', description: 'Ringkasan naratif dan simulasi what-if' },
     ],
 
     components: {
@@ -529,6 +530,77 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
             categoryId: { type: 'string' },
             categoryName: { type: 'string' },
             reason: { type: 'string' },
+          },
+        },
+
+        PeriodSummary: {
+          type: 'object',
+          required: [
+            'from',
+            'to',
+            'income',
+            'expense',
+            'net',
+            'topCategories',
+            'narrative',
+            'narrativeSource',
+            'insights',
+          ],
+          additionalProperties: false,
+          properties: {
+            from: { type: 'integer' },
+            to: { type: 'integer' },
+            income: { type: 'integer' },
+            expense: { type: 'integer' },
+            net: { type: 'integer' },
+            topCategories: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['name', 'total'],
+                additionalProperties: false,
+                properties: { name: { type: 'string' }, total: { type: 'integer' } },
+              },
+            },
+            narrative: { type: 'string' },
+            narrativeSource: {
+              type: 'string',
+              enum: ['model', 'template'],
+              description:
+                'Dinyatakan terbuka. Ringkasan bertemplat yang menyamar sebagai analisis merusak kepercayaan pada seluruh angka di sekitarnya.',
+            },
+            insights: { type: 'array', items: ref('Insight') },
+          },
+        },
+
+        Simulation: {
+          type: 'object',
+          required: [
+            'monthlyCommitment',
+            'months',
+            'currentMonthlySurplus',
+            'projectedMonthlySurplus',
+            'balanceAtEnd',
+            'monthsUntilEmpty',
+            'verdict',
+            'reason',
+            'basisDays',
+            'reliable',
+          ],
+          additionalProperties: false,
+          description:
+            'Aritmetika murni dari data pengguna sendiri. Tidak ada model yang terlibat, jadi jawabannya dapat diperiksa ulang dengan kalkulator.',
+          properties: {
+            monthlyCommitment: { type: 'integer' },
+            months: { type: 'integer' },
+            currentMonthlySurplus: { type: 'integer' },
+            projectedMonthlySurplus: { type: 'integer' },
+            balanceAtEnd: { type: 'integer' },
+            monthsUntilEmpty: { type: ['integer', 'null'] },
+            verdict: { type: 'string', enum: ['aman', 'ketat', 'tidak_aman'] },
+            reason: { type: 'string' },
+            basisDays: { type: 'integer' },
+            reliable: { type: 'boolean' },
           },
         },
 
@@ -1175,6 +1247,46 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
           responses: {
             '200': { description: 'diterapkan', content: json(envelope(ref('Empty'))) },
             ...errors('not_found', 'invalid_input', 'session_expired'),
+          },
+        },
+      },
+
+      '/v1/assistant/summary': {
+        get: {
+          tags: ['asisten'],
+          summary: 'Ringkasan naratif periode berjalan',
+          description:
+            'Angkanya dihitung server dan TIDAK PERNAH datang dari model. Model hanya menyusun kalimatnya, dan menerima angka agregat saja — tanpa nama, merchant, maupun id. Tanpa kredensial model, narasinya bertemplat dan `narrativeSource` mengatakannya.',
+          security: SECURED,
+          responses: {
+            '200': { description: 'ringkasan', content: json(envelope(ref('PeriodSummary'))) },
+            ...errors('session_expired'),
+          },
+        },
+      },
+
+      '/v1/assistant/simulate': {
+        post: {
+          tags: ['asisten'],
+          summary: 'Simulasi komitmen bulanan baru',
+          description:
+            'Menjawab "kalau saya ambil komitmen ini, aman tidak?" dengan aritmetika dari pemasukan dan pengeluaran sembilan puluh hari terakhir.',
+          security: SECURED,
+          requestBody: {
+            required: true,
+            content: json({
+              type: 'object',
+              required: ['monthlyCommitment', 'months'],
+              additionalProperties: false,
+              properties: {
+                monthlyCommitment: { type: 'integer', minimum: 1 },
+                months: { type: 'integer', minimum: 1, maximum: 360 },
+              },
+            }),
+          },
+          responses: {
+            '200': { description: 'simulasi', content: json(envelope(ref('Simulation'))) },
+            ...errors('invalid_input', 'session_expired'),
           },
         },
       },
