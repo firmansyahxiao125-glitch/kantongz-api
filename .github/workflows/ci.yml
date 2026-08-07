@@ -3,6 +3,9 @@ name: CI
 on:
   push: { branches: [main] }
   pull_request:
+  # Dipanggil alur rilis sebagai GERBANG. Tanpa ini, `uses: ./.github/...`
+  # gagal dengan galat yang menunjuk ke berkas pemanggil, bukan ke sini.
+  workflow_call:
 
 jobs:
   verify:

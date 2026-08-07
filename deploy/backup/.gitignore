@@ -1,0 +1,4 @@
+# Direktori ini adalah titik pasang volume cadangan. Isinya tidak pernah
+# masuk repositori; berkas ini ada supaya direktorinya tetap terlacak.
+*
+!.gitignore

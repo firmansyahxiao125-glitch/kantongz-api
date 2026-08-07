@@ -8,3 +8,9 @@ coverage/
 .env.docker
 
 deploy/optional.env
+
+# Cadangan basis data. Berisi DATA PENGGUNA SUNGGUHAN — nama, alamat surel
+# terenkripsi, seluruh buku besar. Satu dump yang ter-commit adalah kebocoran
+# data yang permanen: menghapusnya di commit berikutnya tidak menghapusnya
+# dari riwayat, dan riwayat itu ikut pada setiap kloning.
+deploy/backup/*.dump

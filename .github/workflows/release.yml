@@ -1,0 +1,82 @@
+name: Rilis
+
+# Dipicu tag `v*`, bukan push ke main.
+#
+# Rilis yang terjadi otomatis pada setiap commit membuat "versi apa yang
+# sedang berjalan" menjadi pertanyaan yang jawabannya berubah saat sedang
+# ditanyakan. Tag adalah pernyataan sengaja, dan itulah yang membuat rollback
+# punya sasaran.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag yang dirilis ulang (mis. v1.0.0)'
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  # Gerbang. Rilis TIDAK boleh melewati verifikasi yang sama dengan PR.
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: meta
+        run: |
+          version="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Merilis ${version}"
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Bangun dan dorong API
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          # DUA tag, dan keduanya dibutuhkan untuk alasan yang berbeda:
+          #   - berversi  → sasaran rollback yang tidak pernah berpindah
+          #   - latest    → kenyamanan, TIDAK PERNAH dipakai di produksi
+          tags: |
+            ${{ env.REGISTRY }}/${{ github.repository }}:${{ steps.meta.outputs.version }}
+            ${{ env.REGISTRY }}/${{ github.repository }}:latest
+          # Provenance + SBOM tertanam di manifes citra. Ini yang menjawab
+          # "citra ini dibangun dari commit mana" tanpa bergantung pada
+          # ingatan siapa pun.
+          provenance: true
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Catat digest
+        run: |
+          echo "### Rilis ${{ steps.meta.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Digest citra — INI yang dipakai untuk rollback, bukan tag:' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo '${{ steps.build.outputs.digest }}' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Tag dapat dipindahkan; digest tidak bisa. Penyebaran yang menuju' >> "$GITHUB_STEP_SUMMARY"
+          echo 'digest selalu mendapat byte yang sama persis.' >> "$GITHUB_STEP_SUMMARY"

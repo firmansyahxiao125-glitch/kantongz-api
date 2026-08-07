@@ -1,0 +1,127 @@
+name: Keamanan
+
+# Berjalan pada setiap perubahan DAN terjadwal.
+#
+# Jadwal mingguan penting justru karena kodenya tidak berubah: kerentanan baru
+# diumumkan terhadap dependensi yang sudah lama terpasang, dan repositori yang
+# hanya dipindai saat ada commit tidak akan pernah mengetahuinya.
+on:
+  push: { branches: [main] }
+  pull_request:
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Diperlukan untuk mengunggah hasil pindai ke tab Security.
+  security-events: write
+
+jobs:
+  dependencies:
+    name: Dependensi
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm }
+
+      - run: npm ci
+
+      # `--omit=dev` karena hanya dependensi yang BENAR-BENAR terkirim yang
+      # dapat dieksploitasi di produksi. Kerentanan pada perkakas build
+      # berjalan di mesin pengembang, bukan di jalur permintaan pengguna —
+      # tetap dilaporkan di langkah berikutnya, tetapi tidak memblokir.
+      - name: Audit dependensi produksi
+        run: npm audit --omit=dev --audit-level=high
+
+      # Dilaporkan tanpa memblokir. Perkakas build punya profil risiko yang
+      # berbeda, dan memblokir rilis karena CVE di bundler menghasilkan
+      # kebiasaan melewati gerbang — yang jauh lebih berbahaya.
+      - name: Audit seluruh dependensi (laporan saja)
+        run: npm audit --audit-level=moderate || true
+
+  sbom:
+    name: SBOM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm }
+      - run: npm ci
+
+      # CycloneDX, bukan SPDX. Keduanya sah; CycloneDX lebih ringkas dan
+      # didukung langsung oleh pemindai yang dipakai di bawah.
+      #
+      # SBOM bukan formalitas: ketika CVE berikutnya diumumkan, pertanyaan
+      # pertama adalah "apakah kita memakainya, versi berapa" — dan menjawab
+      # itu dari ingatan adalah cara paling lambat.
+      - name: Bangkitkan SBOM
+        run: npx --yes @cyclonedx/cyclonedx-npm@latest --omit dev --output-file sbom.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-api
+          path: sbom.json
+          retention-days: 90
+
+  image:
+    name: Citra
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Bangun citra
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: kantongz-api:scan
+
+      # Trivy memindai lapisan sistem operasi DAN dependensi aplikasi di dalam
+      # citra. Ini menangkap kelas yang `npm audit` tidak lihat sama sekali:
+      # paket Alpine yang usang di citra dasar.
+      - name: Pindai citra
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: kantongz-api:scan
+          format: sarif
+          output: trivy.sarif
+          severity: HIGH,CRITICAL
+          # Kerentanan tanpa perbaikan tersedia tidak dapat ditindaklanjuti.
+          # Melaporkannya hanya melatih orang mengabaikan laporan.
+          ignore-unfixed: true
+
+      - name: Unggah ke tab Security
+        uses: github/codeql-action/upload-sarif@v3
+        with: { sarif_file: trivy.sarif }
+
+      # Gerbang TERPISAH dari unggahan. Unggahan mendokumentasikan; langkah ini
+      # yang menghentikan. Digabung, kegagalan gerbang akan mencegah laporannya
+      # sendiri terunggah — dan yang paling dibutuhkan saat gagal adalah
+      # laporannya.
+      - name: Gerbang — gagal bila ada CRITICAL
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: kantongz-api:scan
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+
+  secrets:
+    name: Rahasia
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        # Riwayat PENUH. Rahasia yang di-commit lalu dihapus pada commit
+        # berikutnya tetap ada di riwayat, dan tetap dapat diambil siapa pun
+        # yang mengkloning repositori.
+        with: { fetch-depth: 0 }
+
+      - name: Pindai riwayat
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
