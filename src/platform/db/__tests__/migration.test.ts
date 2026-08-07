@@ -54,24 +54,70 @@ describe('migrasi', () => {
     const res = await db.query<{ table_name: string }>(
       `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'`,
     );
-    const names = res.rows.map((r) => r.table_name).sort();
+    const names = new Set(res.rows.map((r) => r.table_name));
 
-    expect(names).toEqual(
-      [
-        'audit_log',
-        'devices',
-        'outbox',
-        'permissions',
-        'refresh_tokens',
-        'role_permissions',
-        'roles',
-        'sessions',
-        'tickets',
-        'user_roles',
-        'users',
-      ].sort(),
-    );
+    /* Kehadiran, bukan kesetaraan persis. Daftar §7 adalah lantai yang tidak
+       boleh turun; domain yang ditambahkan sesudahnya menambah tabel dan tidak
+       boleh membuat penjaga ini berbunyi. */
+    for (const table of [
+      'audit_log',
+      'devices',
+      'outbox',
+      'permissions',
+      'refresh_tokens',
+      'role_permissions',
+      'roles',
+      'sessions',
+      'tickets',
+      'user_roles',
+      'users',
+    ]) {
+      expect(names, table).toContain(table);
+    }
   });
+
+  it('membuat seluruh tabel buku besar', async () => {
+    const res = await db.query<{ table_name: string }>(
+      `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'`,
+    );
+    const names = new Set(res.rows.map((r) => r.table_name));
+
+    for (const table of ['wallet_accounts', 'categories', 'transactions', 'budgets', 'goals']) {
+      expect(names, table).toContain(table);
+    }
+  });
+
+  /**
+   * Batasan CHECK diperiksa di sini dan bukan hanya lewat uji layanan.
+   *
+   * Uji layanan membuktikan lapisan layanan menolaknya; ini membuktikan basis
+   * data menolaknya juga. Keduanya diperlukan, karena jalur tulis akan
+   * bertambah dan yang baru bisa lupa memeriksa.
+   */
+  it('menolak transaksi bertanda negatif di tingkat basis data', async () => {
+    await db.exec(
+      `INSERT INTO users (id,email_hash,hmac_key_version,email_encrypted,full_name_encrypted,password_hash)
+       VALUES ('u_check','\\x00',1,'\\x00','\\x00','x')`,
+    );
+    await db.exec(
+      `INSERT INTO wallet_accounts (id,user_id,name,kind) VALUES ('a_check','u_check','Kas','cash')`,
+    );
+
+    await expect(
+      db.exec(
+        `INSERT INTO transactions (id,user_id,account_id,kind,amount,occurred_at)
+         VALUES ('t_neg','u_check','a_check','expense',-1,now())`,
+      ),
+    ).rejects.toThrow();
+
+    /* Transfer tanpa dompet tujuan melanggar `transactions_transfer_shape`. */
+    await expect(
+      db.exec(
+        `INSERT INTO transactions (id,user_id,account_id,kind,amount,occurred_at)
+         VALUES ('t_bad','u_check','a_check','transfer',1000,now())`,
+      ),
+    ).rejects.toThrow();
+  }, 30_000);
 
   it('membuat kedua enum dengan nilai yang benar', async () => {
     const res = await db.query<{ typname: string; enumlabel: string }>(

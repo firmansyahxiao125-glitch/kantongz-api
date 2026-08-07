@@ -1,4 +1,5 @@
-import { HTTP_STATUS, isAppError } from '../../contracts/errors.js';
+import { STATUS_FOR, codeOf } from '../../contracts/domain.js';
+import { isAppError } from '../../contracts/errors.js';
 import type { App } from '../types.js';
 import { failure } from '../envelope.js';
 
@@ -16,10 +17,10 @@ import { failure } from '../envelope.js';
 export function registerErrorHandler(app: App): void {
   app.setErrorHandler((error, request, reply) => {
     if (isAppError(error)) {
-      const status = HTTP_STATUS[error.code];
+      const code = codeOf(error);
 
       request.log.warn(
-        { err: { code: error.code, message: error.message }, requestId: request.requestId },
+        { err: { code, message: error.message }, requestId: request.requestId },
         'permintaan ditolak',
       );
 
@@ -28,8 +29,8 @@ export function registerErrorHandler(app: App): void {
       }
 
       void reply
-        .status(status)
-        .send(failure(error.code, error.message, request.requestId, error.retryAfterSeconds ?? null));
+        .status(STATUS_FOR[code])
+        .send(failure(code, error.message, request.requestId, error.retryAfterSeconds ?? null));
       return;
     }
 

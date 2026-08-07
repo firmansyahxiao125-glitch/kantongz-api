@@ -4,6 +4,8 @@ import { createLogger } from './platform/observability/logger.js';
 import { createRedis } from './platform/redis/client.js';
 import { buildServer } from './http/server.js';
 import { registerAuth } from './modules/auth/wiring.js';
+import { registerLedger } from './modules/ledger/wiring.js';
+import { seedSystemCategories } from './modules/ledger/seed.js';
 
 const VERSION = '0.1.0';
 
@@ -27,6 +29,12 @@ async function main(): Promise<void> {
 
   const app = buildServer({ config, logger, db, redis, version: VERSION });
   await registerAuth(app, { config, db: db.db, redis: redis.redis, logger });
+  await registerLedger(app, { config, db: db.db });
+
+  /* Kategori bawaan ditanam saat boot, bukan lewat migrasi: migrasi menjalankan
+     SQL, dan daftar ini hidup di TypeScript tempat ia dibaca dan diubah. */
+  const seeded = await seedSystemCategories(db.db);
+  if (seeded > 0) logger.info({ seeded }, 'kategori bawaan ditanam');
 
   let shuttingDown = false;
 

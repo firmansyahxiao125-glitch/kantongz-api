@@ -1,4 +1,4 @@
-import type { AuthErrorCode } from '../contracts/errors.js';
+import type { ErrorCode } from '../contracts/domain.js';
 
 /**
  * Amplop respons. M3_SPEC §18.
@@ -18,7 +18,7 @@ export interface SuccessEnvelope<T> {
 
 export interface ErrorEnvelope {
   error: {
-    code: AuthErrorCode;
+    code: ErrorCode;
     message: string;
     details: unknown;
     retryAfter: number | null;
@@ -31,7 +31,7 @@ export function success<T>(data: T, requestId: string): SuccessEnvelope<T> {
 }
 
 export function failure(
-  code: AuthErrorCode,
+  code: ErrorCode,
   message: string,
   requestId: string,
   retryAfter: number | null = null,
