@@ -75,9 +75,21 @@ export async function buildAuthDeps(deps: AuthWiring): Promise<AuthDeps> {
   };
 }
 
-export async function registerAuth(app: App, deps: AuthWiring): Promise<void> {
+export type DeliverCode = (
+  to: string,
+  purpose: 'verify' | 'reset',
+  code: string,
+) => Promise<void>;
+
+export async function registerAuth(
+  app: App,
+  deps: AuthWiring,
+  /* Hanya mode mandiri yang menggantinya, dan hanya untuk mencetak kodenya ke
+     terminal. Di produksi tidak ada pemanggil yang meneruskan argumen ini. */
+  deliverCode?: DeliverCode,
+): Promise<void> {
   registerAuthRoutes(app, {
     ...(await buildAuthDeps(deps)),
-    deliverCode: logDelivery(deps.logger),
+    deliverCode: deliverCode ?? logDelivery(deps.logger),
   });
 }
