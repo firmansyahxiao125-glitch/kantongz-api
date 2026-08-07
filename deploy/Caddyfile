@@ -1,0 +1,162 @@
+# KANTONGZ — proxy balik produksi.
+#
+# Caddy dan bukan nginx, dan alasannya tunggal: Caddy memperoleh serta
+# memperbarui sertifikat TLS sendiri lewat ACME, tanpa cron, tanpa certbot,
+# tanpa satu pun langkah manual yang bisa terlupa pada pembaruan ke-90 hari.
+# Sertifikat yang kedaluwarsa adalah salah satu insiden produksi paling umum
+# dan paling dapat dicegah, dan menghapus langkah manusianya menghapus
+# kelasnya sekaligus.
+#
+# Berkas ini menangani hal yang TIDAK boleh ditangani aplikasi:
+#   - terminasi TLS dan HTTP/2
+#   - kompresi
+#   - header keamanan lintas-asal
+#   - kebijakan cache aset statis
+#   - batas ukuran badan permintaan
+#
+# ── MENJALANKAN ────────────────────────────────────────────────────────
+#
+# Produksi (butuh domain sungguhan yang menunjuk ke mesin ini):
+#   KANTONGZ_DOMAIN=kantongz.example  docker compose -f docker-compose.prod.yml up -d
+#
+# Lokal (sertifikat yang ditandatangani Caddy sendiri, tanpa ACME):
+#   KANTONGZ_DOMAIN=localhost  docker compose -f docker-compose.prod.yml up -d
+#
+# `localhost` membuat Caddy memakai CA internalnya sendiri. Peramban akan
+# memperingatkan sampai CA-nya dipercayai — itu benar, dan menyembunyikannya
+# akan melatih orang mengabaikan peringatan TLS.
+
+{
+	# Alamat surel ACME diimpor dari berkas terpisah, BUKAN dari variabel.
+	#
+	# `email {$ACME_EMAIL:}` GAGAL diurai ketika variabelnya kosong:
+	#
+	#   parsing caddyfile tokens for 'email': wrong argument count or
+	#   unexpected line ending after 'email'
+	#
+	# Caddy menolak SELURUH konfigurasi karenanya dan hidup ulang tanpa henti
+	# tanpa pernah mengikat porta — sementara `docker compose ps` dengan
+	# tenang melaporkannya "running". Kegagalan yang menyamar sebagai
+	# keberhasilan adalah kegagalan paling mahal untuk ditelusuri.
+	#
+	# Pola glob yang tidak cocok apa pun DIABAIKAN diam-diam oleh Caddy, jadi
+	# berkasnya boleh tidak ada sama sekali. Untuk menyalakan peringatan
+	# kedaluwarsa dari Let's Encrypt — satu-satunya peringatan yang akan
+	# datang sebelum sertifikat mati — buat berkas:
+	#
+	#   deploy/caddy.d/email.caddy    berisi:    email ops@kantongz.example
+	import /etc/caddy/caddy.d/*.caddy
+
+	# Server admin DIMATIKAN. Ia mengekspos API konfigurasi tanpa autentikasi
+	# pada 2019; di dalam jaringan kontainer itu berarti setiap layanan lain
+	# dapat menulis ulang konfigurasi proxy.
+	admin off
+
+	servers {
+		# Nama peladen tidak diumumkan. Versi yang diiklankan mempersempit
+		# pekerjaan penyerang dari "coba semua" menjadi "cari CVE versi ini".
+		protocols h1 h2
+	}
+}
+
+{$KANTONGZ_DOMAIN:localhost} {
+	# ── header keamanan ────────────────────────────────────────────────
+	header {
+		# HSTS: 2 tahun, termasuk subdomain, siap daftar preload.
+		#
+		# PERINGATAN OPERASIONAL: sekali peramban melihat ini, ia MENOLAK
+		# HTTP polos untuk domain tersebut selama masa berlakunya, dan itu
+		# tidak dapat dibatalkan dari sisi peladen. Jangan pasang sampai TLS
+		# terbukti bekerja pada domain dan seluruh subdomainnya.
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Resource-Policy "same-origin"
+
+		# Menghapus jejak tumpukan teknologi.
+		-Server
+		-X-Powered-By
+	}
+
+	# ── kompresi ───────────────────────────────────────────────────────
+	# zstd lebih dulu: rasionya lebih baik daripada gzip pada biaya CPU yang
+	# lebih rendah. Peramban yang belum mendukungnya jatuh ke gzip sendiri
+	# lewat negosiasi `Accept-Encoding`.
+	encode zstd gzip
+
+	# ── API ────────────────────────────────────────────────────────────
+	handle /v1/* {
+		# Batas badan permintaan. Unggahan struk adalah gambar, dan 8 MiB
+		# lebih dari cukup untuk foto ponsel mana pun setelah kompresi.
+		# Tanpa batas, satu permintaan dapat menghabiskan memori proses.
+		request_body {
+			max_size 8MB
+		}
+
+		reverse_proxy api:3000 {
+			# Alamat asli diteruskan. Tanpa ini, SETIAP permintaan terlihat
+			# datang dari IP proxy — dan penguncian per-alamat menjadi
+			# penguncian global yang mengunci semua orang sekaligus.
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+
+			# Kesehatan hulu. Caddy berhenti mengirim lalu lintas ke instans
+			# yang gagal alih-alih meneruskan 502 ke pengguna.
+			health_uri /livez
+			health_interval 10s
+			health_timeout 3s
+		}
+	}
+
+	# Titik kesehatan dan dokumen OpenAPI ikut ke API, tanpa batas badan.
+	handle /healthz {
+		reverse_proxy api:3000
+	}
+	handle /readyz {
+		reverse_proxy api:3000
+	}
+	handle /livez {
+		reverse_proxy api:3000
+	}
+	handle /openapi.json {
+		reverse_proxy api:3000
+	}
+
+	# ── aset statis Next.js ────────────────────────────────────────────
+	# Berkas di bawah `_next/static` diberi nama menurut hash isinya, jadi
+	# isinya TIDAK PERNAH berubah untuk URL yang sama. `immutable` memberi
+	# tahu peramban agar tidak pernah memvalidasi ulang — menghapus satu
+	# perjalanan bolak-balik per aset per kunjungan.
+	handle /_next/static/* {
+		header Cache-Control "public, max-age=31536000, immutable"
+		reverse_proxy web:3100
+	}
+
+	# ── aplikasi web ───────────────────────────────────────────────────
+	handle {
+		reverse_proxy web:3100 {
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+			health_uri /
+			health_interval 15s
+			health_timeout 5s
+		}
+	}
+
+	# ── log ────────────────────────────────────────────────────────────
+	log {
+		output stdout
+		format json
+		# Kredensial tidak pernah muncul di log akses. Header `Authorization`
+		# dan `Cookie` disaring di sini, bukan diandalkan tidak tercatat.
+		level INFO
+	}
+}
+
+# Pengalihan HTTP → HTTPS ditangani Caddy secara otomatis untuk setiap situs
+# yang punya sertifikat. Tidak ada blok terpisah yang perlu ditulis, dan tidak
+# ada blok terpisah yang bisa lupa ditulis.

@@ -1,0 +1,279 @@
+# KANTONGZ — susunan PRODUKSI.
+#
+# Berkas ini TERPISAH dari `docker-compose.yml`, dan pemisahannya disengaja.
+# Susunan pengembangan membuka lima porta ke host, memakai kata sandi yang
+# tertulis di berkas, dan menjalankan Mailpit yang menelan seluruh surel.
+# Ketiganya benar untuk laptop dan salah untuk internet.
+#
+# Menggabungkan keduanya lewat `override` sempat dipertimbangkan dan ditolak:
+# yang berbahaya adalah bawaan yang DIWARISI diam-diam. Di sini setiap nilai
+# produksi tertulis di tempat yang dapat dibaca sekaligus, dan tidak ada satu
+# pun yang datang dari berkas lain.
+#
+# ── PERBEDAAN INTI DARI SUSUNAN PENGEMBANGAN ───────────────────────────
+#
+#   1. HANYA Caddy yang membuka porta ke dunia (80, 443). Postgres, Redis,
+#      API, dan web TIDAK dapat dijangkau dari luar jaringan kontainer.
+#   2. Seluruh rahasia WAJIB — `${VAR:?pesan}` membuat Compose MENOLAK jalan
+#      bila kosong, alih-alih diam-diam memakai bawaan pengembangan.
+#   3. Batas sumber daya dipasang. Kontainer tanpa batas akan mengambil
+#      seluruh memori mesin, dan yang mati kelaparan adalah tetangganya.
+#   4. Kebijakan mulai ulang, rotasi log, dan pemeriksaan kesehatan lengkap.
+#   5. Mailpit TIDAK ADA. Produksi memakai SMTP sungguhan.
+#
+# ── MENJALANKAN ────────────────────────────────────────────────────────
+#
+#   cp .env.prod.example .env.prod
+#   # isi setiap nilai; bangkitkan kunci dengan: npm run keys:generate
+#   docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
+#
+# Verifikasi sebelum mengarahkan lalu lintas: `deploy/verify-prod.sh`
+
+name: kantongz-prod
+
+x-logging: &logging
+  # Tanpa ini, log JSON menumpuk sampai memenuhi disk — dan disk penuh
+  # menghentikan Postgres sebelum menghentikan apa pun yang lain.
+  driver: json-file
+  options:
+    max-size: '20m'
+    max-file: '5'
+
+x-restart: &restart
+  # `unless-stopped`, bukan `always`: kontainer yang sengaja dihentikan
+  # operator TIDAK boleh hidup lagi sendiri saat daemon dimulai ulang.
+  restart: unless-stopped
+
+services:
+  # ── proxy balik ──────────────────────────────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    <<: *restart
+    logging: *logging
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp' # HTTP/3
+    environment:
+      KANTONGZ_DOMAIN: ${KANTONGZ_DOMAIN:?domain wajib diisi, mis. kantongz.example atau localhost}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Potongan konfigurasi opsional (mis. alamat surel ACME). Direktori
+      # boleh kosong — pola glob yang tidak cocok apa pun diabaikan Caddy.
+      - ./deploy/caddy.d:/etc/caddy/caddy.d:ro
+      # Sertifikat BERTAHAN antar-penyebaran. Volume yang hilang berarti
+      # Caddy meminta sertifikat baru setiap kali — dan Let's Encrypt
+      # membatasi 5 sertifikat per domain per minggu.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api: { condition: service_healthy }
+      web: { condition: service_started }
+    healthcheck:
+      test: ['CMD', 'caddy', 'version']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits: { memory: 256M }
+
+  # ── basis data ───────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    <<: *restart
+    logging: *logging
+    # TIDAK ADA `ports`. Basis data yang terbuka ke internet adalah cara
+    # tercepat kehilangan seluruh isinya, dan ia tidak butuh porta host untuk
+    # dijangkau layanan lain di jaringan yang sama.
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?wajib}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?wajib — bangkitkan acak, jangan diketik}
+      POSTGRES_DB: ${POSTGRES_DB:?wajib}
+      # Checksum halaman. Menangkap kerusakan disk saat DIBACA alih-alih
+      # membiarkannya menyebar diam-diam ke cadangan.
+      POSTGRES_INITDB_ARGS: '--data-checksums'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/backup:/backup
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits: { memory: 1G }
+
+  # ── cache & penguncian ───────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    <<: *restart
+    logging: *logging
+    # Persistensi disk tetap MATI (M3_SPEC §5.3, §19.2): isinya berumur
+    # pendek dan tidak boleh meninggalkan jejak.
+    #
+    # `maxmemory-policy noeviction` DISENGAJA dan penting: penguncian
+    # autentikasi hidup di sini. Kebijakan `allkeys-lru` akan MENGUSIR catatan
+    # penguncian saat memori penuh — mengubah tekanan memori menjadi jendela
+    # tebak-sandi tanpa batas.
+    command:
+      - redis-server
+      - --appendonly
+      - 'no'
+      - --save
+      - ''
+      - --maxmemory
+      - '256mb'
+      - --maxmemory-policy
+      - noeviction
+      - --requirepass
+      - ${REDIS_PASSWORD:?wajib}
+    healthcheck:
+      test: ['CMD-SHELL', 'redis-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    deploy:
+      resources:
+        limits: { memory: 384M }
+
+  # ── migrasi ──────────────────────────────────────────────────────────
+  # Proses terpisah yang selesai lalu keluar. Penyebaran bergulir menjalankan
+  # banyak instans API sekaligus, dan sepuluh instans yang masing-masing
+  # menerapkan migrasi saat boot akan berlomba di atas tabel yang sama.
+  migrate:
+    image: ${API_IMAGE:-kantongz-api:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: 'no'
+    logging: *logging
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: info
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      JWT_ISSUER: ${JWT_ISSUER:?wajib}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:?wajib}
+      JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:?wajib}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:?wajib}
+      MASTER_KEY: ${MASTER_KEY:?wajib}
+      HMAC_KEY_VERSION: ${HMAC_KEY_VERSION:-1}
+    command: ['node', 'dist/platform/db/migrate.js']
+
+  # ── API ──────────────────────────────────────────────────────────────
+  api:
+    image: ${API_IMAGE:-kantongz-api:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    <<: *restart
+    logging: *logging
+    # TIDAK ADA `ports`. Hanya Caddy yang boleh menjangkaunya.
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      PORT: '3000'
+      HOST: '0.0.0.0'
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      JWT_ISSUER: ${JWT_ISSUER:?wajib}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:?wajib}
+      JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:?wajib}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:?wajib}
+      MASTER_KEY: ${MASTER_KEY:?wajib}
+      HMAC_KEY_VERSION: ${HMAC_KEY_VERSION:-1}
+      # Asal peramban. TIDAK ada bawaan pengembangan di sini — daftar yang
+      # salah diam-diam mengizinkan situs mana pun memanggil API ini dengan
+      # kredensial pengguna.
+      CORS_ORIGINS: ${CORS_ORIGINS:?wajib — daftar asal produksi, dipisahkan koma}
+      SMTP_HOST: ${SMTP_HOST:?wajib}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-true}
+      MAIL_FROM: ${MAIL_FROM:?wajib — alamat pengirim, mis. no-reply@kantongz.example}
+    #
+    # ── VARIABEL OPSIONAL ──────────────────────────────────────────────
+    #
+    # Diletakkan di berkas TERPISAH, dan itu perbaikan cacat — bukan selera.
+    #
+    # Percobaan pertama menulis `SMTP_USER: ${SMTP_USER:-}`. Bentuk itu
+    # menyetel variabelnya menjadi STRING KOSONG, dan skema konfigurasi
+    # menolak string kosong tepat di tempat ia menerima KETIADAAN:
+    #
+    #   SMTP_USER: Too small: expected string to have >=1 characters
+    #   OLLAMA_BASE_URL: Invalid URL
+    #
+    # API gagal boot berulang kali karenanya, dan gagalnya benar — relay SMTP
+    # tanpa autentikasi dan Ollama yang tidak dipasang keduanya SAH, dan
+    # keduanya harus dapat dinyatakan dengan tidak menulis apa pun.
+    #
+    # `required: false` membuat berkasnya boleh tidak ada sama sekali.
+    env_file:
+      - path: deploy/optional.env
+        required: false
+
+    healthcheck:
+      # `/readyz`, bukan `/livez`: Caddy tidak boleh mengirim lalu lintas
+      # sampai basis data dan Redis terbukti terhubung.
+      test:
+        ['CMD-SHELL', 'node -e "fetch(''http://127.0.0.1:3000/readyz'').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    deploy:
+      resources:
+        limits: { memory: 768M }
+      # Argon2id memakai 64 MiB per verifikasi sandi. Batas memori harus
+      # menampung beberapa proses masuk serentak DITAMBAH heap dasar Node.
+
+  # ── aplikasi web ─────────────────────────────────────────────────────
+  web:
+    image: ${WEB_IMAGE:-kantongz-web:latest}
+    build:
+      context: ../kantongz-web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:?wajib — mis. https://kantongz.example}
+    <<: *restart
+    logging: *logging
+    depends_on:
+      api: { condition: service_healthy }
+    environment:
+      NODE_ENV: production
+      PORT: '3100'
+      HOSTNAME: '0.0.0.0'
+      # BFF (`src/lib/server/backend.ts`) berbicara ke API lewat jaringan
+      # kontainer, BUKAN lewat domain publik. Memutar lewat Caddy menambah
+      # satu lompatan TLS untuk permintaan yang tidak pernah meninggalkan
+      # mesin ini.
+      API_URL: http://api:3000
+      # `NEXT_PUBLIC_*` dipanggang ke bundel SAAT BUILD, bukan dibaca saat
+      # jalan. Karena itu ia diteruskan sebagai `build.args` di atas; menaruhnya
+      # di sini saja tidak akan berpengaruh apa pun pada berkas yang sudah
+      # dibangun — kegagalan yang tidak menghasilkan satu pun galat.
+      NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL}
+    deploy:
+      resources:
+        limits: { memory: 512M }
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
+
+# Jaringan bawaan Compose sudah terisolasi dari host kecuali porta yang
+# dipetakan. Karena hanya Caddy yang memetakan porta, sisanya tidak dapat
+# dijangkau dari luar mesin.

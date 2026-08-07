@@ -6,3 +6,5 @@ dist/
 *.log
 coverage/
 .env.docker
+
+deploy/optional.env
