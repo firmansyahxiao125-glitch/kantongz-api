@@ -87,20 +87,44 @@ export async function createPendingAccount(
   db: Database,
   keys: KeyProvider,
   input: CreateAccountInput,
-): Promise<string> {
+): Promise<string | null> {
   const email = normaliseEmail(input.email);
   const hash = hmacDigest(keys, email);
   const id = newId('usr');
 
-  await db.insert(users).values({
-    id,
-    emailHash: hash.digest,
-    hmacKeyVersion: hash.keyVersion,
-    emailEncrypted: encryptColumn(keys, email),
-    fullNameEncrypted: encryptColumn(keys, input.fullName.trim()),
-    passwordHash: input.passwordHash,
-    status: 'pending_verification',
-  });
+  const rows = await db
+    .insert(users)
+    .values({
+      id,
+      emailHash: hash.digest,
+      hmacKeyVersion: hash.keyVersion,
+      emailEncrypted: encryptColumn(keys, email),
+      fullNameEncrypted: encryptColumn(keys, input.fullName.trim()),
+      passwordHash: input.passwordHash,
+      status: 'pending_verification',
+    })
+    /*
+     * Balapan pendaftaran diselesaikan indeks unik parsial `users_email_active`,
+     * bukan pemeriksaan "apakah email sudah ada" di lapisan layanan — lima
+     * permintaan bersamaan seluruhnya lolos pemeriksaan itu.
+     *
+     * `onConflictDoNothing` mengubah pelanggaran indeks menjadi nol baris
+     * alih-alih galat yang lolos sebagai 500. Yang 500 membocorkan bahwa
+     * sesuatu di tingkat basis data terjadi, dan memberi penyerang cara
+     * membedakan "menang balapan" dari "kalah balapan".
+     */
+    .onConflictDoNothing({
+      target: users.emailHash,
+      /* Predikatnya WAJIB ikut. `users_email_active` adalah indeks unik PARSIAL
+         (`WHERE deleted_at IS NULL`), dan PostgreSQL menolak ON CONFLICT yang
+         targetnya tidak menyebutkan predikat yang sama persis. */
+      where: isNull(users.deletedAt),
+    })
+    .returning({ id: users.id });
+
+  /* Nol baris berarti kalah balapan: alamatnya sudah dipegang pendaftaran lain
+     yang selesai lebih dulu. Jawabannya sama persis dengan pemeriksaan awal. */
+  if (rows.length === 0) return null;
 
   return id;
 }
@@ -296,8 +320,29 @@ export async function findRefreshToken(
   return rows[0] ?? null;
 }
 
-export async function markRotated(db: Database, id: string): Promise<void> {
-  await db.update(refreshTokens).set({ rotatedAt: new Date() }).where(eq(refreshTokens.id, id));
+/**
+ * Menandai token sebagai sudah dirotasi, dan mengembalikan apakah PEMANGGIL INI
+ * yang berhasil menandainya.
+ *
+ * `WHERE rotated_at IS NULL` mengubahnya dari penandaan menjadi KLAIM. Tanpa
+ * syarat itu, sepuluh permintaan penyegaran yang berangkat bersamaan — keadaan
+ * yang benar-benar terjadi ketika sepuluh kueri menemui token kedaluwarsa pada
+ * frame yang sama — semuanya membaca `rotated_at IS NULL`, semuanya menerbitkan
+ * generasi baru, dan yang datang belakangan lalu terbaca sebagai pemakaian
+ * ulang yang mencabut seluruh keluarga. Pengguna keluar dari akunnya tanpa
+ * pernah melakukan kesalahan.
+ *
+ * PostgreSQL menyerialkan UPDATE pada baris yang sama, jadi tepat satu
+ * pemanggil menerima `true`.
+ */
+export async function claimRotation(db: Database, id: string): Promise<boolean> {
+  const rows = await db
+    .update(refreshTokens)
+    .set({ rotatedAt: new Date() })
+    .where(and(eq(refreshTokens.id, id), isNull(refreshTokens.rotatedAt)))
+    .returning({ id: refreshTokens.id });
+
+  return rows.length > 0;
 }
 
 /** Mencabut SELURUH keluarga. §5.2 — korban dan pencuri sama-sama keluar,

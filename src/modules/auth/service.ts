@@ -238,6 +238,18 @@ export async function register(
     passwordHash: await hashPassword(input.password),
   });
 
+  /*
+   * Kalah balapan. Pemeriksaan di atas dan penyisipan ini adalah DUA langkah,
+   * dan lima permintaan bersamaan seluruhnya lolos langkah pertama — yang
+   * menegakkan keunikan adalah indeks `users_email_active`, bukan pemeriksaan
+   * itu.
+   *
+   * Jawabannya sama persis dengan pemeriksaan awal: `email_taken`. Jawaban yang
+   * berbeda memberi penyerang cara membedakan "menang balapan" dari "kalah",
+   * dan sebelum ini pelanggaran indeks lolos sebagai 500.
+   */
+  if (userId === null) throw new AppError('email_taken');
+
   const code = verificationCode();
   const ticket = await repo.createTicket(
     deps.db,
@@ -404,6 +416,47 @@ export interface RotationResult {
 
 const graceKey = (hash: Buffer): string => `grace:${hash.toString('hex')}`;
 
+/**
+ * Membaca hasil rotasi yang tersimpan di cache grace.
+ *
+ * Mengembalikan `null` baik ketika entrinya tidak ada MAUPUN ketika Redis tidak
+ * dapat dihubungi. Pemanggil memperlakukan keduanya sama, dan itu disengaja:
+ * keduanya berarti "tidak ada jawaban yang dapat dipercaya di sini".
+ */
+async function readGrace(deps: AuthDeps, hash: Buffer): Promise<RotationResult | null> {
+  try {
+    const raw = await deps.redis.get(graceKey(hash));
+    return raw ? (JSON.parse(raw) as RotationResult) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Berapa lama menunggu pemenang balapan menulis hasilnya ke cache grace. */
+const RACE_WAIT_MS = 150;
+const RACE_POLL_MS = 15;
+
+/**
+ * Menunggu sebentar entri grace muncul.
+ *
+ * Batasnya sengaja pendek dan tetap: yang ditunggu adalah celah antara satu
+ * INSERT dan satu SET Redis di proses yang sama, bukan pekerjaan lambat. Batas
+ * yang panjang akan mengubah cabang ini menjadi tempat permintaan menumpuk saat
+ * Redis benar-benar jatuh — dan saat Redis jatuh, jawabannya memang harus
+ * datang cepat.
+ */
+async function awaitGrace(deps: AuthDeps, hash: Buffer): Promise<RotationResult | null> {
+  const deadline = Date.now() + RACE_WAIT_MS;
+
+  do {
+    const cached = await readGrace(deps, hash);
+    if (cached) return cached;
+    await new Promise((resolve) => setTimeout(resolve, RACE_POLL_MS));
+  } while (Date.now() < deadline);
+
+  return null;
+}
+
 export async function refresh(
   deps: AuthDeps,
   input: { refreshToken: string; device: DeviceInfo },
@@ -465,6 +518,34 @@ export async function refresh(
 
   if (decision.kind === 'replay' && cached) return cached;
 
+  /*
+   * BALAPAN, BUKAN PENCURIAN.
+   *
+   * Sepuluh permintaan penyegaran yang berangkat bersamaan tiba di sini dalam
+   * urutan yang tidak dijamin. Yang menang klaim menerbitkan generasi baru lalu
+   * menulis cache grace — dan di antara kedua langkah itu ada celah. Permintaan
+   * yang membaca basis data di dalam celah tersebut melihat `rotated_at` sudah
+   * terisi tetapi cache masih kosong, dan `decideRotation` — dengan benar,
+   * berdasarkan apa yang ia lihat — menyimpulkan pemakaian ulang.
+   *
+   * Akibatnya seluruh keluarga token dicabut dan pengguna keluar dari akunnya
+   * tanpa pernah melakukan kesalahan. §21 Tahap 4 menyebutnya
+   * `refresh_reuse_detected` PALSU, dan menuntut nol kejadian sebelum peluncuran.
+   *
+   * Jadi: bila rotasinya baru saja terjadi, cache ditunggu sebentar. Pencurian
+   * sungguhan tidak akan pernah menemukan entri itu — pencuri memakai token
+   * lama setelah jendela grace lewat, dan cabang ini tidak berlaku untuknya.
+   */
+  if (
+    decision.kind === 'revoke_family' &&
+    decision.reason === 'reuse' &&
+    stored?.rotatedAt &&
+    now - stored.rotatedAt.getTime() < GRACE_WINDOW_MS
+  ) {
+    const raced = await awaitGrace(deps, hash);
+    if (raced) return raced;
+  }
+
   if (decision.kind === 'revoke_family') {
     if (stored) await repo.revokeFamily(deps.db, stored.sessionId, decision.reason);
     await audit(deps, {
@@ -493,6 +574,47 @@ export async function refresh(
   const account = await repo.findAccountById(deps.db, deps.keys, session.userId);
   if (!account) throw new AppError('session_expired');
 
+  /*
+   * KLAIM, bukan penandaan. Dilakukan SEBELUM apa pun diterbitkan.
+   *
+   * Sepuluh permintaan penyegaran yang berangkat bersamaan — keadaan yang
+   * benar-benar terjadi ketika sepuluh kueri menemui token kedaluwarsa pada
+   * frame yang sama — seluruhnya membaca `rotated_at IS NULL` dan seluruhnya
+   * lolos `decideRotation`. Tanpa klaim atomik, kesepuluhnya menerbitkan
+   * generasi baru; yang berikutnya lalu terbaca sebagai pemakaian ulang dan
+   * mencabut seluruh keluarga. Pengguna keluar dari akunnya tanpa pernah
+   * melakukan kesalahan, dan §21 Tahap 4 menyebut ini `refresh_reuse_detected`
+   * palsu.
+   *
+   * Yang KALAH klaim bukan pencuri — ia peserta balapan yang sah. Ia menunggu
+   * hasil pemenang di cache grace dan mengembalikannya, persis seperti
+   * pengulangan biasa di dalam jendela grace (§5.3).
+   */
+  const claimed = await repo.claimRotation(deps.db, stored.id);
+
+  /*
+   * Klaim TIDAK ditegakkan pada jalur degradasi.
+   *
+   * §5.3 sudah memutuskan bahwa ketika cache tidak sehat, deteksi pemakaian
+   * ulang tidak diterapkan sama sekali — Redis yang jatuh membuat setiap entri
+   * tampak hilang, dan menghukum semuanya akan mengeluarkan seluruh pengguna
+   * aktif. Menuntut klaim di sini akan membatalkan keputusan itu lewat pintu
+   * belakang.
+   */
+  if (!claimed && decision.kind !== 'rotate_degraded') {
+    const cachedAfterRace = await awaitGrace(deps, hash);
+    if (cachedAfterRace) return cachedAfterRace;
+
+    /*
+     * Kalah balapan DAN pemenang tidak pernah menulis hasilnya. Menolak dengan
+     * `session_expired` adalah pilihan yang benar: memberi generasi baru
+     * berarti dua keluarga hidup dari satu induk, dan mencabut keluarga berarti
+     * menghukum pengguna karena balapan yang tidak ia sebabkan. Klien
+     * menyegarkan lagi, dan percobaan berikutnya menemukan token pemenang.
+     */
+    throw new AppError('session_expired');
+  }
+
   const nextToken = randomToken();
   const generation = await repo.nextGeneration(deps.db, session.id);
 
@@ -512,7 +634,6 @@ export async function refresh(
       ),
     ),
   );
-  await repo.markRotated(deps.db, stored.id);
 
   const access = await issueAccessToken(
     deps.ring,
