@@ -76,7 +76,12 @@ services:
       # Asal peramban yang boleh memanggil langsung. Aplikasi web memanggil
       # buku besar dari peramban dengan Bearer token; tanpa daftar ini setiap
       # panggilan itu diblokir peramban sebelum sempat berangkat.
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3100,http://127.0.0.1:3100}
+      #
+      # 3100 = aplikasi web. 8081 = Metro, tempat aplikasi mobile dijalankan di
+      # React Native Web untuk verifikasi. Yang terakhir HANYA untuk lingkungan
+      # pengembangan ini — penyebaran produksi menyetel `CORS_ORIGINS` sendiri
+      # dan tidak mewarisi bawaan ini.
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3100,http://127.0.0.1:3100,http://localhost:8081,http://127.0.0.1:8081}
     ports: ['3000:3000']
     # Meneruskan SIGTERM ke PID 1 supaya penutupan tertib benar-benar berjalan.
     init: true
