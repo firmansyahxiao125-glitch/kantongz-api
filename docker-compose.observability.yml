@@ -25,6 +25,10 @@ services:
     restart: unless-stopped
     volumes:
       - ./deploy/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Aturan peringatan dipasang TERPISAH. `rule_files` di prometheus.yml
+      # menunjuk jalur ini; tanpa mount-nya Prometheus menolak konfigurasi dan
+      # gagal start — kegagalan yang berisik, dan itu yang diinginkan.
+      - ./deploy/observability/alerts.yml:/etc/prometheus/alerts.yml:ro
       - promdata:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'

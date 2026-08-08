@@ -7,6 +7,11 @@ global:
   external_labels:
     lingkungan: produksi
 
+# Aturan peringatan. Tanpa baris ini `/api/v1/rules` menjawab `{"groups":[]}` —
+# metrik terkumpul, dasbor tersedia, dan tidak ada yang membangunkan siapa pun.
+rule_files:
+  - /etc/prometheus/alerts.yml
+
 scrape_configs:
   - job_name: kantongz-api
     metrics_path: /metrics

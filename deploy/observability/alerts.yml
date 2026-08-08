@@ -1,0 +1,93 @@
+# Aturan peringatan.
+#
+# Sebelum berkas ini ada, Prometheus menjawab `/api/v1/rules` dengan
+# `{"groups":[]}` — metrik dikumpulkan, dasbor tersedia, dan TIDAK ADA yang
+# membangunkan siapa pun. Pemantauan yang tidak pernah memanggil hanyalah
+# arsip yang dibaca sesudah pengguna yang mengeluh.
+#
+# ── MENGAPA HANYA ENAM ATURAN ──────────────────────────────────────────
+#
+# Setiap aturan di sini menyatakan sesuatu yang benar-benar menuntut manusia
+# bangun. Yang tidak menuntut tindakan tidak dimasukkan: peringatan yang
+# sering menyala tanpa perlu dimatikan orang dalam sebulan, dan yang mati
+# tidak menyala saat benar-benar dibutuhkan.
+#
+# `for:` ada di setiap aturan dengan sengaja. Tanpanya, satu scrape yang
+# meleset — restart biasa, jaringan tersendat — sudah cukup memanggil.
+
+groups:
+  - name: kantongz-ketersediaan
+    rules:
+      - alert: ApiTidakTerjangkau
+        # `up` adalah metrik sintetis Prometheus: 0 berarti scrape gagal.
+        # Ini SATU-SATUNYA aturan yang tetap bekerja ketika aplikasinya mati
+        # total — sisanya bergantung pada metrik yang sudah tidak datang.
+        expr: up{job="kantongz-api"} == 0
+        for: 1m
+        labels: { severity: kritis }
+        annotations:
+          summary: 'API tidak dapat di-scrape selama 1 menit'
+          description: 'Prometheus tidak menerima jawaban dari {{ $labels.instance }}. Aplikasi mati, jaringan putus, atau porta metrik berubah.'
+
+      - alert: TingkatGalatServerTinggi
+        # 5xx adalah kegagalan KAMI. 4xx tidak dimasukkan: klien yang mengirim
+        # permintaan buruk bukan insiden, dan memasukkannya membuat peringatan
+        # ini menyala setiap kali seseorang salah ketik sandi.
+        expr: |
+          sum(rate(kantongz_http_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(kantongz_http_requests_total[5m])), 0.001) > 0.05
+        for: 5m
+        labels: { severity: kritis }
+        annotations:
+          summary: 'Lebih dari 5% permintaan menjawab 5xx'
+          description: 'Rasio galat server {{ $value | humanizePercentage }} selama 5 menit.'
+
+  - name: kantongz-latensi
+    rules:
+      - alert: LatensiP95Memburuk
+        # p95, bukan rata-rata. Rata-rata menyembunyikan ekor — dan ekor itulah
+        # yang dirasakan pengguna. Uji beban mencatat titik jenuh ~150 rps pada
+        # rute agregat dengan p95 di bawah 250 ms; 1 detik jauh di luar itu.
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(kantongz_http_request_duration_seconds_bucket[5m]))) > 1
+        for: 10m
+        labels: { severity: peringatan }
+        annotations:
+          summary: 'Latensi p95 di atas 1 detik'
+          description: 'p95 = {{ $value | humanizeDuration }} selama 10 menit.'
+
+  - name: kantongz-sumber-daya
+    rules:
+      - alert: MemoriProsesTinggi
+        # Batas kontainer API adalah 768 MiB (docker-compose.prod.yml).
+        # 600 MiB memberi ruang bertindak sebelum OOM-killer bertindak duluan.
+        expr: kantongz_process_resident_memory_bytes > 600 * 1024 * 1024
+        for: 10m
+        labels: { severity: peringatan }
+        annotations:
+          summary: 'RSS proses di atas 600 MiB'
+          description: 'RSS {{ $value | humanize1024 }}B, batas kontainer 768 MiB.'
+
+      - alert: ProsesBaruMulaiBerulang
+        # Uptime yang terus rendah berarti proses mati dan dihidupkan ulang
+        # kebijakan restart — gejala yang TIDAK terlihat pada `up`, karena
+        # setiap instans baru menjawab scrape dengan benar.
+        expr: kantongz_process_uptime_seconds < 300
+        for: 15m
+        labels: { severity: peringatan }
+        annotations:
+          summary: 'Proses API terus memulai ulang'
+          description: 'Uptime tidak pernah melewati 5 menit selama 15 menit terakhir.'
+
+  - name: kantongz-pengamatan-diri
+    rules:
+      - alert: PrometheusTidakSehat
+        # Pengamat yang mati diam-diam membuat seluruh aturan di atas berhenti
+        # tanpa satu pun peringatan. Ini yang menjaga penjaganya.
+        expr: up{job="prometheus"} == 0
+        for: 5m
+        labels: { severity: peringatan }
+        annotations:
+          summary: 'Prometheus tidak dapat men-scrape dirinya sendiri'
+          description: 'Aturan peringatan lain tidak dapat dipercaya selama ini berlangsung.'
