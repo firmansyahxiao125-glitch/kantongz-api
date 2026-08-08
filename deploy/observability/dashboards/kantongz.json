@@ -1,0 +1,90 @@
+{
+  "title": "KANTONGZ — API",
+  "uid": "kantongz-api",
+  "tags": ["kantongz"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Permintaan per detik, per rute",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (route) (rate(kantongz_http_requests_total[5m]))",
+          "legendFormat": "{{route}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Laju galat (5xx dan 4xx)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "description": "Dipisah 4xx dan 5xx: yang pertama adalah klien yang salah, yang kedua adalah kita yang salah. Menggabungkannya menyembunyikan insiden di balik lalu lintas pemindai porta.",
+      "targets": [
+        {
+          "expr": "sum(rate(kantongz_http_requests_total{status=~\"5..\"}[5m]))",
+          "legendFormat": "5xx"
+        },
+        {
+          "expr": "sum(rate(kantongz_http_requests_total{status=~\"4..\"}[5m]))",
+          "legendFormat": "4xx"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Latensi p50 / p95 / p99",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "description": "Dihitung dari histogram, bukan dari rata-rata. Sistem yang melayani 99 permintaan dalam 5 ms dan satu dalam 5 detik punya rata-rata 55 ms — angka yang tidak dialami siapa pun.",
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(kantongz_http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(kantongz_http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(kantongz_http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Permintaan sedang diproses",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
+      "description": "Naik terus tanpa turun berarti permintaan masuk lebih cepat daripada selesai — tanda jenuh sebelum latensi sempat naik.",
+      "targets": [{ "expr": "kantongz_http_requests_in_flight", "legendFormat": "in-flight" }]
+    },
+    {
+      "id": 5,
+      "title": "Memori proses",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
+      "description": "Batas kontainer 768 MB. RSS terukur di bawah beban: 591 MB (docs/LOAD_TEST.md).",
+      "fieldConfig": { "defaults": { "unit": "bytes" } },
+      "targets": [
+        { "expr": "kantongz_process_resident_memory_bytes", "legendFormat": "RSS" },
+        { "expr": "kantongz_process_heap_used_bytes", "legendFormat": "heap" }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Log API",
+      "type": "logs",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 16 },
+      "description": "Cari satu permintaan dengan menempelkan requestId-nya: {kontainer=\"kantongz-prod-api-1\"} |= \"01K9...\"",
+      "datasource": { "type": "loki" },
+      "targets": [{ "expr": "{kontainer=~\"kantongz-prod-api.*\"}" }]
+    }
+  ]
+}

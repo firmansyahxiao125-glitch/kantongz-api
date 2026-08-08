@@ -1,0 +1,22 @@
+# Prometheus — konfigurasi scrape.
+global:
+  # 15 detik. Lebih rapat menghasilkan data yang tidak dipakai siapa pun dan
+  # menggandakan ukuran penyimpanan; lebih renggang kehilangan lonjakan pendek.
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    lingkungan: produksi
+
+scrape_configs:
+  - job_name: kantongz-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['api:3000']
+        labels:
+          layanan: api
+
+  # Prometheus memantau dirinya sendiri. Ketika metrik berhenti datang,
+  # pertanyaan pertamanya adalah "apakah aplikasinya mati atau scraper-nya".
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']

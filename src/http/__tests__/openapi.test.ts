@@ -83,12 +83,32 @@ describe('dokumen', () => {
   });
 });
 
+/**
+ * Rute OPERASIONAL yang sengaja TIDAK terdokumentasi.
+ *
+ * OpenAPI menggambarkan KONTRAK yang dijanjikan kepada klien. `/metrics`
+ * bukan bagian darinya: ia berbicara format eksposisi Prometheus alih-alih
+ * amplop `data`/`error`, tidak berversi, dan bentuknya boleh berubah kapan
+ * saja tanpa itu dihitung sebagai perubahan yang merusak.
+ *
+ * Ada alasan kedua yang lebih penting: dokumen OpenAPI disajikan PUBLIK di
+ * `/openapi.json`. Mencantumkan `/metrics` di sana mengiklankan titik yang
+ * membocorkan seluruh bentuk lalu lintas — rute mana yang ada, seberapa
+ * sering dipanggil, berapa banyak yang gagal.
+ *
+ * Daftar ini SENGAJA pendek dan eksplisit. Setiap tambahan harus membawa
+ * alasannya, karena mekanisme yang sama dapat dipakai untuk menyembunyikan
+ * rute API yang sekadar malas didokumentasikan.
+ */
+const RUTE_OPERASIONAL = new Set(['get /metrics']);
+
 describe('kesetaraan dengan rute sungguhan', () => {
   it('setiap rute terdaftar ada di dokumen', () => {
     const doc = buildOpenApiDocument(BASE);
     const paths = doc.paths as Record<string, Record<string, unknown>>;
 
     const hilang = registeredRoutes()
+      .filter((r) => !RUTE_OPERASIONAL.has(`${r.method} ${r.url}`))
       .filter((r) => {
         const entry = paths[toOpenApiPath(r.url)];
         return !entry || !(r.method in entry);
@@ -96,6 +116,16 @@ describe('kesetaraan dengan rute sungguhan', () => {
       .map((r) => `${r.method.toUpperCase()} ${r.url}`);
 
     expect(hilang).toEqual([]);
+  });
+
+  it('rute operasional yang dikecualikan benar-benar ada', () => {
+    /* Menjaga daftar pengecualian tetap jujur: entri yang rutenya sudah
+       dihapus akan diam-diam menutupi rute lain bernama sama di kemudian
+       hari. */
+    const nyata = new Set(registeredRoutes().map((r) => `${r.method} ${r.url}`));
+    for (const rute of RUTE_OPERASIONAL) {
+      expect(nyata, `pengecualian '${rute}' tidak cocok rute mana pun`).toContain(rute);
+    }
   });
 
   it('setiap jalur di dokumen benar-benar terdaftar', () => {

@@ -1,0 +1,106 @@
+# Susunan pengamatan — Prometheus, Grafana, Loki.
+#
+# TERPISAH dari `docker-compose.prod.yml`, dan dijalankan sebagai overlay:
+#
+#   docker compose --env-file .env.prod \
+#     -f docker-compose.prod.yml -f docker-compose.observability.yml up -d
+#
+# Terpisah karena pengamatan adalah keputusan operasional, bukan bagian dari
+# aplikasi. Penyebaran kecil boleh menjalankannya tanpa; menyatukannya ke
+# berkas produksi memaksa setiap orang membayar tiga kontainer tambahan.
+#
+# ── STATUS: READY FOR DEPLOYMENT, BELUM DIJALANKAN ─────────────────────
+#
+# Berkas ini BELUM pernah dijalankan: mesin Docker mati selama sesi rekayasa
+# ini dan tidak dapat dinyalakan kembali. Yang SUDAH diverifikasi adalah
+# sumber datanya — `/metrics` menghasilkan eksposisi Prometheus yang sah,
+# dengan invarian histogram yang diuji. Yang BELUM adalah apakah Prometheus
+# benar-benar men-scrape-nya dan Grafana benar-benar menggambarnya.
+
+name: kantongz-obs
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    restart: unless-stopped
+    volumes:
+      - ./deploy/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      # Retensi 15 hari. Metrik tanpa batas retensi memenuhi disk, dan disk
+      # penuh menghentikan Postgres sebelum menghentikan Prometheus.
+      - '--storage.tsdb.retention.time=15d'
+      # TIDAK ada `--web.enable-admin-api`. Ia mengizinkan penghapusan deret
+      # waktu tanpa autentikasi.
+    # TIDAK ada `ports`. Prometheus hanya dijangkau Grafana lewat jaringan
+    # kontainer; antarmukanya membocorkan seluruh bentuk lalu lintas.
+    deploy:
+      resources:
+        limits: { memory: 512M }
+
+  loki:
+    image: grafana/loki:3.3.2
+    restart: unless-stopped
+    command: ['-config.file=/etc/loki/local-config.yaml']
+    volumes:
+      - lokidata:/loki
+    deploy:
+      resources:
+        limits: { memory: 512M }
+
+  # Promtail membaca log kontainer dari soket Docker dan mengirimkannya ke Loki.
+  #
+  # Soket dipasang READ-ONLY. Akses tulis ke soket Docker setara root di host —
+  # kontainer mana pun yang memilikinya dapat menjalankan kontainer lain
+  # dengan hak istimewa penuh.
+  promtail:
+    image: grafana/promtail:3.3.2
+    restart: unless-stopped
+    volumes:
+      - ./deploy/observability/promtail.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    command: ['-config.file=/etc/promtail/config.yml']
+    depends_on: [loki]
+    deploy:
+      resources:
+        limits: { memory: 256M }
+
+  grafana:
+    image: grafana/grafana:11.5.1
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?wajib — bangkitkan acak}
+      # Pendaftaran mandiri dan akses anonim DIMATIKAN. Grafana yang terbuka
+      # menampilkan seluruh bentuk lalu lintas kepada siapa pun.
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+      GF_AUTH_ANONYMOUS_ENABLED: 'false'
+      GF_ANALYTICS_REPORTING_ENABLED: 'false'
+    volumes:
+      - ./deploy/observability/grafana-datasources.yml:/etc/grafana/provisioning/datasources/ds.yml:ro
+      - ./deploy/observability/grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/db.yml:ro
+      - ./deploy/observability/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    ports:
+      # HANYA localhost. Grafana tidak boleh dijangkau dari internet tanpa
+      # melewati proxy yang mengautentikasi.
+      - '127.0.0.1:3300:3000'
+    depends_on: [prometheus, loki]
+    deploy:
+      resources:
+        limits: { memory: 384M }
+
+volumes:
+  promdata:
+  lokidata:
+  grafanadata:
+
+networks:
+  default:
+    # Bergabung ke jaringan susunan produksi supaya Prometheus dapat menjangkau
+    # `api:3000/metrics`. Tanpa ini, keduanya berada di jaringan berbeda dan
+    # scrape gagal dengan galat DNS yang menyesatkan.
+    name: kantongz-prod_default
+    external: true
