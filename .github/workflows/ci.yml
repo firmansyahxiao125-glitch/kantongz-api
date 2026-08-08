@@ -44,6 +44,13 @@ jobs:
 
       # Setiap langkah gagal menghentikan pipeline. Tidak ada `continue-on-error`
       # di mana pun — gerbang yang boleh dilewati bukan gerbang.
+      # Templat `*.example` HARUS terlacak git. `.env.prod.example` pernah
+      # lolos dari repositori karena `.gitignore` memuat `.env.*` sementara
+      # negasinya hanya menyebut `.env.example` — dan berkas yang diabaikan
+      # tidak muncul di `git status` sama sekali.
+      - name: Templat lingkungan terlacak
+        run: npm run check:templates
+
       - name: TypeScript
         run: npm run typecheck
       - name: ESLint

@@ -19,7 +19,8 @@
     "keys:generate": "node scripts/generate-keys.mjs",
     "e2e": "bash scripts/e2e.sh",
     "verify": "bash scripts/verify-standalone.sh",
-    "loadtest": "node scripts/loadtest.mjs"
+    "loadtest": "node scripts/loadtest.mjs",
+    "check:templates": "node scripts/check-templates.mjs"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",

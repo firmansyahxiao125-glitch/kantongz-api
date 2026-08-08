@@ -2,7 +2,18 @@ node_modules/
 dist/
 .env
 .env.*
+# Templat DIKECUALIKAN satu per satu.
+#
+# `!.env.example` saja tidak cukup: `.env.prod.example` juga cocok `.env.*`,
+# dan ia lolos dari repositori tanpa satu pun peringatan. Operator yang
+# mengkloning tidak menemukan templat produksi sama sekali — dan yang hilang
+# adalah berkas yang MENDAFTARKAN setiap rahasia yang harus diisi.
+#
+# Pola negasi baru WAJIB ditambahkan bersama setiap templat baru. Diperiksa
+# gerbang `npm run check:templates`.
 !.env.example
+!.env.prod.example
+!*.example
 *.log
 coverage/
 .env.docker
