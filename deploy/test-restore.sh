@@ -88,12 +88,33 @@ fi
 step '2. Menanam data uji'
 
 STAMP="$(date -u +%s)"
-psql_q "INSERT INTO wallet_accounts (id, user_id, name, kind, currency, opening_balance)
-        SELECT 'acc_${MARK}${STAMP}', 'usr_${MARK}${STAMP}', 'Dompet Uji Pulih', 'cash', 'IDR', 1000000
-        WHERE NOT EXISTS (SELECT 1 FROM wallet_accounts WHERE id = 'acc_${MARK}${STAMP}')" >/dev/null
+
+# Pengguna DITANAM LEBIH DULU.
+#
+# `wallet_accounts.user_id` menunjuk `users` lewat foreign key, jadi menyisipkan
+# dompet ke basis data kosong gagal senyap — percobaan pertama melaporkan
+# "tidak ada baris" tanpa menyebut sebabnya. Kolom terenkripsi diisi bytea
+# harfiah: uji ini memeriksa PEMULIHAN, bukan kriptografi, dan isinya tidak
+# pernah didekripsi di sepanjang jalur ini.
+$COMPOSE exec -T postgres psql -U "$PGUSER" -d "$PGDB" -v ON_ERROR_STOP=1 -c "
+  INSERT INTO users (id, email_hash, hmac_key_version, email_encrypted,
+                     full_name_encrypted, password_hash, status)
+  VALUES ('usr_${MARK}${STAMP}', '\x00'::bytea, 1, '\x00'::bytea,
+          '\x00'::bytea, 'uji-pemulihan-bukan-hash-sungguhan', 'active')
+  ON CONFLICT (id) DO NOTHING;
+  INSERT INTO wallet_accounts (id, user_id, name, kind, currency, opening_balance)
+  VALUES ('acc_${MARK}${STAMP}', 'usr_${MARK}${STAMP}', 'Dompet Uji Pulih',
+          'cash', 'IDR', 1000000)
+  ON CONFLICT (id) DO NOTHING;
+" >/dev/null 2>&1
 
 seeded="$(psql_q "SELECT count(*) FROM wallet_accounts WHERE id LIKE 'acc_${MARK}%'")"
-if [ "${seeded:-0}" -ge 1 ]; then ok "menanam ${seeded} baris uji"; else bad 'penanaman' 'tidak ada baris'; exit 1; fi
+if [ "${seeded:-0}" -ge 1 ]; then
+  ok "menanam ${seeded} baris uji (pengguna + dompet)"
+else
+  bad 'penanaman' 'tidak ada baris — periksa batasan foreign key'
+  exit 1
+fi
 
 before_accounts="$(psql_q 'SELECT count(*) FROM wallet_accounts')"
 before_trx="$(psql_q 'SELECT count(*) FROM transactions')"
@@ -179,7 +200,8 @@ done
 # ── 8. bersihkan ───────────────────────────────────────────────────────
 step '8. Membersihkan data uji'
 psql_q "DELETE FROM wallet_accounts WHERE id LIKE 'acc_${MARK}%'" >/dev/null
-ok 'baris uji dihapus'
+psql_q "DELETE FROM users WHERE id LIKE 'usr_${MARK}%'" >/dev/null
+ok 'baris uji dihapus (dompet dan pengguna)'
 
 # ── ringkasan ──────────────────────────────────────────────────────────
 printf '\n%s\n' '────────────────────────────────────────────'

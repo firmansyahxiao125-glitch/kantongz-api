@@ -25,3 +25,7 @@ deploy/optional.env
 # data yang permanen: menghapusnya di commit berikutnya tidak menghapusnya
 # dari riwayat, dan riwayat itu ikut pada setiap kloning.
 deploy/backup/*.dump
+
+# Lingkungan uji pemulihan sementara.
+.env.restoretest
+deploy/backup-test/
