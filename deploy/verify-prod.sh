@@ -130,6 +130,22 @@ for leak in 'server' 'x-powered-by'; do
   fi
 done
 
+# ── 4b. titik internal tidak terekspos ─────────────────────────────────
+section '4b. Titik internal'
+
+# `/metrics` membocorkan bentuk lalu lintas. Ia HARUS ditolak di proxy, bukan
+# sekadar kebetulan tidak terjangkau karena penampung terakhir menunjuk ke
+# aplikasi web.
+mcode="$(curl "${CURL_OPTS[@]}" -o /dev/null -w '%{http_code}' "$BASE/metrics" 2>/dev/null)"
+mbody="$(curl "${CURL_OPTS[@]}" "$BASE/metrics" 2>/dev/null | head -c 200)"
+if printf '%s' "$mbody" | grep -q 'kantongz_http_requests_total'; then
+  bad '/metrics TEREKSPOS' 'eksposisi Prometheus terjangkau dari internet'
+elif [ "$mcode" = "404" ]; then
+  ok '/metrics ditolak (404)'
+else
+  bad '/metrics' "kode $mcode — seharusnya 404"
+fi
+
 # ── 5. kesehatan ───────────────────────────────────────────────────────
 section '5. Titik kesehatan'
 

@@ -126,6 +126,26 @@
 		reverse_proxy api:3000
 	}
 
+	# ── titik internal: DITOLAK secara eksplisit ───────────────────────
+	#
+	# `/metrics` membocorkan seluruh bentuk lalu lintas — rute mana yang ada,
+	# seberapa sering dipanggil, berapa banyak yang gagal.
+	#
+	# Ia sudah tidak terjangkau sebelum blok ini ada, tetapi hanya SECARA
+	# KEBETULAN: permintaan jatuh ke `handle` penampung terakhir dan diteruskan
+	# ke aplikasi web, yang menjawab 404 karena tidak punya rute itu.
+	#
+	# Perlindungan yang kebetulan adalah perlindungan yang hilang tanpa
+	# peringatan. Menambahkan satu rute `/metrics` ke aplikasi Next, atau
+	# mengubah penampung terakhir menuju API, akan membuka metrik ke internet
+	# tanpa satu pun baris yang terlihat berubah.
+	#
+	# Prometheus tetap dapat men-scrape `api:3000/metrics` langsung lewat
+	# jaringan kontainer; ia tidak pernah melewati Caddy.
+	handle /metrics {
+		respond "Not Found" 404
+	}
+
 	# ── aset statis Next.js ────────────────────────────────────────────
 	# Berkas di bawah `_next/static` diberi nama menurut hash isinya, jadi
 	# isinya TIDAK PERNAH berubah untuk URL yang sama. `immutable` memberi
