@@ -5,9 +5,44 @@ set -uo pipefail
 
 WEB=http://127.0.0.1:3100
 API=http://127.0.0.1:3000
-JAR=$(mktemp)
+# Jalur RELATIF, bukan `mktemp`.
+#
+# `MSYS_NO_PATHCONV=1` di atas — yang dibutuhkan agar jalur di dalam kontainer
+# tidak diterjemahkan — juga mematikan penerjemahan untuk curl.exe, dan curl
+# adalah biner WINDOWS. Ia menerima `/tmp/tmp.AbC` apa adanya, mencoba menulis
+# ke `C:\tmp\tmp.AbC`, dan diam-diam tidak menulis apa pun. Berkas header yang
+# selalu kosong itulah yang membuat SELURUH sesi tampak gagal.
+#
+# Jalur relatif dipahami curl mana pun, di sistem mana pun.
+HDR='./.e2e-headers.tmp'
+COOKIE=''
 PASS=0
 FAIL=0
+
+# ── KUKI DISIMPAN SENDIRI, BUKAN LEWAT TOPLES curl ─────────────────────
+#
+# Skrip ini dulu memakai `curl -c/-b` dan gagal pada 23 penegasan sekaligus,
+# seluruhnya berakar pada satu baris: kuki `kz_rt` tidak pernah tersimpan.
+#
+# SEBABNYA BUKAN PRODUKNYA. BFF menyetel kuki dengan atribut `Secure`, dan
+# curl MENOLAK menyimpan kuki `Secure` yang tiba lewat `http://` — tanpa
+# pengecualian. Peramban justru memberi `localhost` pengecualian "asal
+# tepercaya" dan menyimpannya.
+#
+# Dibuktikan di peramban sungguhan terhadap susunan yang sama: daftar →
+# verifikasi → `POST /api/auth/refresh` menjawab **200** dengan access token
+# RS256 yang HANYA bisa datang dari kuki httpOnly itu. Alur masuknya utuh.
+#
+# Jadi toplesnya yang salah, bukan produknya — dan gerbang yang merah karena
+# perkakasnya melatih orang mengabaikan gerbang. Kuki kini dibaca dari header
+# respons dan dikirim balik sendiri, yang juga menguji LEBIH banyak: atributnya
+# ditegaskan satu per satu alih-alih dipercayakan pada toples.
+serap() {
+  local pairs
+  pairs=$(sed -n 's/^[Ss]et-[Cc]ookie: \([^;]*\).*/\1/p' "$HDR" | tr -d '\r' | tr '\n' ';' | sed 's/;$//')
+  [ -n "$pairs" ] && COOKIE="$pairs"
+  return 0
+}
 
 ok()   { PASS=$((PASS+1)); printf '  ✓ %s\n' "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf '  ✗ %s — %s\n' "$1" "${2:-}"; }
@@ -57,8 +92,9 @@ echo "$JWKS" | grep -q '"kty":"RSA"' && ok "kunci publik diterbitkan" || bad "jw
 echo "$JWKS" | grep -q '"d":'        && bad "kunci PRIVAT bocor di jwks" || ok "kunci privat tidak ikut"
 
 sec "Pendaftaran (lewat BFF)"
-REG=$(curl -s -c "$JAR" -X POST "$WEB/api/auth/register" -H 'content-type: application/json' \
+REG=$(curl -s -D "$HDR" -X POST "$WEB/api/auth/register" -H 'content-type: application/json' \
   -d "{\"fullName\":\"Uji Kontainer\",\"email\":\"$EMAIL\",\"password\":\"$SANDI\"}")
+serap
 TICKET=$(echo "$REG" | sed -n 's/.*"ticket":"\([^"]*\)".*/\1/p')
 [ -n "$TICKET" ] && ok "tiket diterbitkan" || bad "tiket" "$REG"
 echo "$REG" | grep -q '"maskedEmail"' && ok "email disamarkan" || bad "maskedEmail"
@@ -67,15 +103,31 @@ CODE=$(kode "verify:$TICKET")
 [ -n "$CODE" ] && ok "outbox memuat kode verifikasi" || bad "outbox kosong"
 
 sec "Verifikasi & sesi"
-VER=$(curl -s -b "$JAR" -c "$JAR" -X POST "$WEB/api/auth/verify" -H 'content-type: application/json' \
+VER=$(curl -s -D "$HDR" -H "cookie: $COOKIE" -X POST "$WEB/api/auth/verify" -H 'content-type: application/json' \
   -d "{\"ticket\":\"$TICKET\",\"code\":\"$CODE\"}")
+SETC=$(grep -i '^set-cookie:' "$HDR" | tr -d '\r')
+serap
 echo "$VER" | grep -q '"accessToken"' && ok "sesi diterbitkan" || bad "sesi" "$VER"
 [ "$(echo "$VER" | grep -c refreshToken)" = "0" ] && ok "refresh token TIDAK ada di badan" || bad "refresh token bocor ke klien"
-grep -q "kz_rt" "$JAR" && ok "kuki kz_rt tersimpan" || bad "kuki kz_rt"
-[ "$(grep -c HttpOnly "$JAR")" -ge 2 ] && ok "kedua kuki HttpOnly" || bad "kuki tidak HttpOnly"
+
+# Atribut ditegaskan SATU PER SATU pada header aslinya. Toples curl hanya bisa
+# menjawab "ada atau tidak"; ini menjawab "dengan perlindungan apa".
+echo "$SETC" | grep -q 'kz_rt='                    && ok "kuki kz_rt diterbitkan"   || bad "kuki kz_rt" "$SETC"
+[ "$(echo "$SETC" | grep -ci 'HttpOnly')" -ge 2 ]  && ok "kedua kuki HttpOnly"      || bad "kuki tidak HttpOnly" "$SETC"
+[ "$(echo "$SETC" | grep -ci 'Secure')" -ge 2 ]    && ok "kedua kuki Secure"        || bad "kuki tidak Secure" "$SETC"
+[ "$(echo "$SETC" | grep -ci 'SameSite=lax')" -ge 2 ] && ok "kedua kuki SameSite=Lax" || bad "kuki tanpa SameSite" "$SETC"
+RT_VAL=$(echo "$SETC" | sed -n 's/.*kz_rt=\([^;]*\).*/\1/p' | head -1)
+if [ -z "$RT_VAL" ]; then
+  bad "nilai kz_rt tidak terbaca dari header" "$SETC"
+elif echo "$VER" | grep -qF "$RT_VAL"; then
+  bad "nilai refresh token muncul di badan respons"
+else
+  ok "nilai kuki tidak digemakan ke badan"
+fi
 
 sec "Penyegaran token"
-R=$(curl -s -b "$JAR" -c "$JAR" -X POST "$WEB/api/auth/refresh" -H 'content-type: application/json' -d '{}')
+R=$(curl -s -D "$HDR" -H "cookie: $COOKIE" -X POST "$WEB/api/auth/refresh" -H 'content-type: application/json' -d '{}')
+serap
 AT=$(echo "$R" | sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p')
 [ -n "$AT" ] && ok "disegarkan hanya dengan kuki" || bad "refresh" "$R"
 AUTH=(-H "authorization: Bearer $AT")
@@ -167,8 +219,9 @@ LOCK=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$WEB/api/auth/sign-in" -H
 is "sandi BENAR tetap ditolak saat terkunci" "$LOCK" "429"
 
 sec "Keluar"
-is "sign-out" "$(curl -s -b "$JAR" -c "$JAR" -o /dev/null -w '%{http_code}' -X POST "$WEB/api/auth/sign-out" -H 'content-type: application/json' -d '{}')" "200"
-is "refresh sesudah keluar" "$(curl -s -b "$JAR" -o /dev/null -w '%{http_code}' -X POST "$WEB/api/auth/refresh" -H 'content-type: application/json' -d '{}')" "401"
+is "sign-out" "$(curl -s -D "$HDR" -H "cookie: $COOKIE" -o /dev/null -w '%{http_code}' -X POST "$WEB/api/auth/sign-out" -H 'content-type: application/json' -d '{}')" "200"
+serap  # sign-out MENGOSONGKAN kz_rt; kuki kosong itu yang harus dikirim balik
+is "refresh sesudah keluar" "$(curl -s -H "cookie: $COOKIE" -o /dev/null -w '%{http_code}' -X POST "$WEB/api/auth/refresh" -H 'content-type: application/json' -d '{}')" "401"
 
 sec "CORS"
 # Kebijakan ini HANYA ditegakkan peramban; curl mengabaikannya. Yang diperiksa
@@ -191,5 +244,5 @@ done
 curl -s -D- -o /dev/null "$WEB/masuk" | grep -qi 'x-frame-options: DENY' && ok "header X-Frame-Options" || bad "X-Frame-Options"
 
 printf '\n────────────────────────\n  LULUS %d   GAGAL %d\n────────────────────────\n' "$PASS" "$FAIL"
-rm -f "$JAR"
+rm -f "$HDR"
 exit $((FAIL > 0 ? 1 : 0))
