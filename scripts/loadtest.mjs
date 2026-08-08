@@ -43,6 +43,24 @@ const LEVELS = (arg('levels', '1,4,8,16,32,64') ?? '').split(',').map(Number);
    manusia menyalinnya, karena langkah manual di tengah uji beban berarti uji
    beban itu tidak akan dijalankan dua kali. */
 const LOGFILE = arg('logfile', null);
+/* Kode verifikasi dapat diberikan langsung — dipakai ketika peladen mengirim
+   surel sungguhan ke Mailpit alih-alih mencetak ke stdout. */
+const MAILPIT = arg('mailpit', null);
+/* Token yang sudah jadi. Dipakai terhadap susunan PRODUKSI, yang sengaja tidak
+   menjalankan Mailpit dan menyensor kode verifikasi dari log — jadi tidak ada
+   jalur otomatis untuk memperolehnya, dan memaksakannya akan menuntut
+   mengubah konfigurasi produksi hanya demi pengujian. */
+const TOKEN = arg('token', null);
+
+/* Sertifikat CA-internal Caddy tidak dipercayai secara bawaan.
+   
+   Diterima HANYA ketika sasarannya localhost. Terhadap domain sungguhan,
+   sertifikat yang tidak sah HARUS tetap menggagalkan uji — alat ukur yang
+   diam-diam menerima TLS palsu akan melaporkan sukses atas koneksi yang
+   sedang disadap. */
+if (BASE.startsWith('https://localhost')) {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+}
 
 /* ── persentil ────────────────────────────────────────────────────────── */
 
@@ -93,6 +111,22 @@ async function setup() {
      Rute dev khusus memberikannya kembali supaya uji dapat berjalan tanpa
      manusia membaca log. */
   let code = process.env.KANTONGZ_DEV_CODE ?? null;
+
+  if (!code && MAILPIT) {
+    /* Dijajal berulang: pekerja outbox berjalan pada interval. */
+    for (let attempt = 0; attempt < 60 && !code; attempt += 1) {
+      const res = await fetch(`${MAILPIT}/api/v1/messages?limit=50`);
+      const box = await res.json();
+      for (const m of box.messages ?? []) {
+        const to = (m.To ?? []).map((a) => a.Address).join(' ');
+        if (!to.includes(email)) continue;
+        const full = await (await fetch(`${MAILPIT}/api/v1/message/${m.ID}`)).json();
+        const hit = /\d{6}/.exec(full.Text ?? full.HTML ?? '');
+        if (hit) { code = hit[0]; break; }
+      }
+      if (!code) await sleep(400);
+    }
+  }
 
   if (!code && LOGFILE) {
     /* Dijajal berulang: pekerja outbox berjalan pada interval, jadi barisnya
@@ -222,7 +256,13 @@ const PATHS = [
 console.log(`\nUji beban → ${BASE}`);
 console.log(`Tingkat: ${LEVELS.join(', ')} serentak · ${String(SECONDS)}s per tingkat\n`);
 
-const token = await setup();
+/* Token yang diberikan MELEWATI penyiapan akun sepenuhnya.
+
+   Dibutuhkan terhadap susunan produksi, yang sengaja tidak menjalankan Mailpit
+   dan menyensor kode verifikasi dari log — jadi tidak ada jalur otomatis untuk
+   memperolehnya, dan memaksakannya akan menuntut mengubah konfigurasi produksi
+   hanya demi pengujian. */
+const token = TOKEN ?? (await setup());
 console.log('Akun dan 120 transaksi disiapkan.\n');
 
 for (const [path, label] of PATHS) {
