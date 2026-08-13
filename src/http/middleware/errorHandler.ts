@@ -1,5 +1,6 @@
 import { STATUS_FOR, codeOf } from '../../contracts/domain.js';
 import { isAppError } from '../../contracts/errors.js';
+import { asConflict } from '../../platform/db/conflict.js';
 import type { App } from '../types.js';
 import { failure } from '../envelope.js';
 
@@ -16,21 +17,32 @@ import { failure } from '../envelope.js';
  */
 export function registerErrorHandler(app: App): void {
   app.setErrorHandler((error, request, reply) => {
-    if (isAppError(error)) {
-      const code = codeOf(error);
+    /*
+     * Pelanggaran indeks unik diterjemahkan LEBIH DULU.
+     *
+     * Tanpa langkah ini ia jatuh ke cabang terakhir dan menjadi 500, padahal
+     * `openapi.json` menjanjikan 409 pada tiga rute yang membuatnya. Terjemahan
+     * hanya menghasilkan `DomainError` dengan kalimat KURASI dari
+     * `platform/db/conflict.ts` — pesan driver dan nilai masukan tidak pernah
+     * ikut menyeberang, jadi aturan di atas tetap berlaku utuh.
+     */
+    const galat = isAppError(error) ? error : (asConflict(error) ?? error);
+
+    if (isAppError(galat)) {
+      const code = codeOf(galat);
 
       request.log.warn(
-        { err: { code, message: error.message }, requestId: request.requestId },
+        { err: { code, message: galat.message }, requestId: request.requestId },
         'permintaan ditolak',
       );
 
-      if (error.retryAfterSeconds !== undefined) {
-        void reply.header('retry-after', String(error.retryAfterSeconds));
+      if (galat.retryAfterSeconds !== undefined) {
+        void reply.header('retry-after', String(galat.retryAfterSeconds));
       }
 
       void reply
         .status(STATUS_FOR[code])
-        .send(failure(code, error.message, request.requestId, error.retryAfterSeconds ?? null));
+        .send(failure(code, galat.message, request.requestId, galat.retryAfterSeconds ?? null));
       return;
     }
 

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { DomainError } from '../../contracts/domain.js';
 import { AppError } from '../../contracts/errors.js';
 import { success } from '../../http/envelope.js';
 import type { App } from '../../http/types.js';
@@ -50,9 +51,27 @@ const schemas = {
 
 function parse<T extends z.ZodType>(schema: T, body: unknown): z.infer<T> {
   const result = schema.safeParse(body);
-  /* Bentuk masukan yang salah tidak pernah menjelaskan dirinya ke klien —
-     pesan validasi membocorkan bentuk API kepada siapa pun yang menebak. */
-  if (!result.success) throw new AppError('unknown', 'permintaan tidak valid');
+  /*
+   * Bentuk masukan yang salah tidak pernah menjelaskan dirinya ke klien —
+   * pesan validasi membocorkan bentuk API kepada siapa pun yang menebak. Itu
+   * tetap berlaku: kalimat di bawah SENGAJA tidak menyebut kolom mana pun.
+   *
+   * Yang diperbaiki adalah KODENYA. Sebelum ini `AppError('unknown')`, dan
+   * `unknown` memetakan ke 500 — jadi setiap badan permintaan auth yang cacat
+   * dijawab "kesalahan server". Terukur: `deviceId` 5 karakter (skemanya
+   * menuntut 8) pada `POST /v1/auth/sign-in` mengembalikan 500, sementara
+   * `openapi.json` menjanjikan 422 untuk rute yang sama.
+   *
+   * Akibatnya bukan cuma kosmetik. Klien tidak bisa membedakan "masukanmu
+   * salah" dari "peladen kami rusak", jadi ia mengulang permintaan yang tidak
+   * akan pernah berhasil; dan setiap klien ceroboh menaikkan angka 5xx yang
+   * seharusnya membangunkan manusia hanya ketika kita yang salah.
+   *
+   * `invalid_input` (422) adalah kode yang SUDAH dipakai modul buku besar,
+   * asisten, dan wawasan untuk hal yang sama persis. Auth satu-satunya yang
+   * menyimpang.
+   */
+  if (!result.success) throw new DomainError('invalid_input', 'permintaan tidak valid');
   return result.data;
 }
 
