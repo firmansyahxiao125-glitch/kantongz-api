@@ -121,7 +121,7 @@ async function setup() {
         const to = (m.To ?? []).map((a) => a.Address).join(' ');
         if (!to.includes(email)) continue;
         const full = await (await fetch(`${MAILPIT}/api/v1/message/${m.ID}`)).json();
-        const hit = /\d{6}/.exec(full.Text ?? full.HTML ?? '');
+        const hit = /\b\d{6}\b/.exec(full.Text ?? full.HTML ?? '');
         if (hit) { code = hit[0]; break; }
       }
       if (!code) await sleep(400);
