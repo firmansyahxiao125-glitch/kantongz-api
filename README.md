@@ -58,10 +58,19 @@ Yang wajib dan tidak punya bawaan: `DATABASE_URL`, `REDIS_URL`, `JWT_ISSUER`,
 yang benar untuk penyebaran khusus-mobile, sebab `fetch` native tidak tunduk
 pada CORS sama sekali.
 
-`MAIL_ENDPOINT`, `MAIL_API_KEY`, dan `MAIL_FROM` harus diisi lengkap atau
-dikosongkan seluruhnya. Kosong berarti pekerja outbox berjalan dalam mode
-catat-saja: pesan tetap diantrekan dan tetap ditandai terkirim, tetapi tidak ada
-yang berangkat — dan proses mengatakannya di log saat boot.
+Email dikirim lewat SMTP. Yang menentukan tujuannya: `SMTP_HOST`, `SMTP_PORT`,
+`SMTP_SECURE`, dan `MAIL_FROM`. Autentikasinya opsional — `SMTP_USER` dan
+`SMTP_PASSWORD` harus diisi berpasangan atau tidak sama sekali, sebab relay
+tanpa autentikasi itu sah. Untuk susunan produksi keduanya tinggal di
+`deploy/optional.env` yang terpisah; alasannya, beserta cara pindah ke relay
+berbayar, ada di [`deploy/EMAIL.md`](deploy/EMAIL.md).
+
+`MAIL_ENDPOINT` dan `MAIL_API_KEY` adalah jalur HTTP alternatif dan juga
+berpasangan. Keduanya opsional dan tidak dipakai susunan mana pun saat ini.
+
+Tanpa konfigurasi SMTP, pekerja outbox berjalan dalam mode catat-saja: pesan
+tetap diantrekan dan ditandai terkirim, tetapi tidak ada yang berangkat — dan
+proses mengatakannya di log saat boot.
 
 ## Perintah
 
@@ -142,5 +151,12 @@ penegakan batasan yang sama. Yang tidak ada hanyalah proses server terpisah.
 
 ## Yang belum ada
 
-Pengiriman email sungguhan menunggu kredensial penyedia. Semua di sekitarnya —
-outbox, percobaan ulang, dead letter, templat — sudah berjalan dan teruji.
+Pengiriman lewat relay SMTP BERBAYAR menunggu kredensial penyedia, dan itu
+satu-satunya bagian alur email yang belum terbukti.
+
+Yang sudah terbukti, ujung ke ujung: pendaftaran mengirim kode, kodenya tiba,
+dan verifikasinya berhasil — di susunan pengembangan MAUPUN di susunan produksi
+lokal lewat `docker-compose.prod.local.yml`, melalui jalur penuh
+Caddy → Web → BFF → API → SMTP. Yang berganti nanti hanyalah nilai
+lingkungan; tidak ada kode maupun arsitektur yang ikut berubah. Rinciannya di
+[`deploy/EMAIL.md`](deploy/EMAIL.md).

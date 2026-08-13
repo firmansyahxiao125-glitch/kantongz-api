@@ -66,8 +66,13 @@ tidak terverifikasi.
 
 ```env
 SMTP_USER=<pengguna>
-SMTP_PASS=<sandi/kunci api>
+SMTP_PASSWORD=<sandi/kunci api>
 ```
+
+Namanya `SMTP_PASSWORD`, bukan `SMTP_PASS` — skema konfigurasi hanya mengenal
+yang pertama, dan yang kedua akan diabaikan diam-diam sampai relay menolak
+loginnya. Salin dari `deploy/optional.env.example` dan HAPUS baris yang tidak
+dipakai; mengosongkan nilainya membuat API gagal boot.
 
 Berkas TERPISAH, dan itu perbaikan cacat yang sudah terjadi — bukan selera.
 Menulisnya sebagai `${SMTP_USER:-}` di compose menyetel variabelnya menjadi
