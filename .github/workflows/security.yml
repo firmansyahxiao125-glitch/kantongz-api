@@ -83,8 +83,17 @@ jobs:
       # Trivy memindai lapisan sistem operasi DAN dependensi aplikasi di dalam
       # citra. Ini menangkap kelas yang `npm audit` tidak lihat sama sekali:
       # paket Alpine yang usang di citra dasar.
+      # Tag `0.28.0` TIDAK ADA LAGI di hulu. Proyek trivy-action berpindah ke
+      # penandaan berawalan `v`, dan tag lama tanpa awalan ikut hilang — jadi
+      # langkah ini gagal sebelum kontainernya sempat dijalankan:
+      #
+      #   Unable to resolve action `aquasecurity/trivy-action@0.28.0`,
+      #   unable to find version `0.28.0`
+      #
+      # Aksi pihak ketiga yang ditambatkan ke tag yang dapat dihapus adalah
+      # gerbang yang bisa padam tanpa satu baris kode pun berubah di sini.
       - name: Pindai citra
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: kantongz-api:scan
           format: sarif
@@ -103,7 +112,7 @@ jobs:
       # sendiri terunggah — dan yang paling dibutuhkan saat gagal adalah
       # laporannya.
       - name: Gerbang — gagal bila ada CRITICAL
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: kantongz-api:scan
           format: table
