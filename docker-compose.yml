@@ -1,7 +1,25 @@
 name: kantongz
 
+#
+# Kebijakan restart, dipakai bersama.
+#
+# `docker-compose.prod.yml` sudah memakai pola anchor yang sama; berkas ini
+# tertinggal, dan akibatnya TERAMATI: sesudah Docker Desktop dimulai ulang,
+# `api` dan `web` bangkit karena keduanya `unless-stopped`, sementara postgres,
+# redis, dan mailpit TIDAK — ketiganya tanpa kebijakan sama sekali. API lalu
+# berputar gagal melawan basis data yang tidak ada (`Exited (1)`), dan yang
+# terlihat pengembang hanyalah backend yang mati tanpa sebab.
+#
+# Ketergantungan harus punya daya hidup minimal SAMA dengan yang bergantung
+# padanya. Dependensi yang mati lebih permanen daripada layanannya adalah cara
+# paling andal menghasilkan restart-loop.
+#
+x-restart: &restart
+  restart: unless-stopped
+
 services:
   postgres:
+    <<: *restart
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: kantongz
@@ -16,6 +34,7 @@ services:
       retries: 10
 
   redis:
+    <<: *restart
     image: redis:7-alpine
     # Persistensi disk DIMATIKAN. M3_SPEC §5.3 dan §19.2 — isi Redis berumur
     # pendek dan tidak boleh meninggalkan jejak di disk.
@@ -31,6 +50,7 @@ services:
   # menampilkannya di antarmuka web di :8025. Tanpa akun, tanpa biaya, dan tanpa
   # risiko email uji mendarat di kotak masuk orang sungguhan.
   mailpit:
+    <<: *restart
     image: axllent/mailpit:latest
     ports: ['1025:1025', '8025:8025']
     environment:
@@ -48,6 +68,7 @@ services:
   # sekaligus, dan sepuluh instans yang masing-masing menerapkan migrasi saat
   # boot akan berlomba di atas tabel yang sama.
   migrate:
+    image: ${API_IMAGE_DEV:-kantongz-api:dev}
     build: .
     depends_on:
       postgres: { condition: service_healthy }
@@ -66,6 +87,7 @@ services:
     restart: 'no'
 
   api:
+    image: ${API_IMAGE_DEV:-kantongz-api:dev}
     build: .
     depends_on:
       postgres: { condition: service_healthy }
@@ -120,7 +142,22 @@ services:
     init: true
     restart: unless-stopped
 
+  # Tag DEV yang eksplisit, dan ini bukan kerapian.
+  #
+  # Tanpa kunci `image:`, Compose menurunkan nama dari nama proyek dan menjadi
+  # `kantongz-web:latest` — TAG YANG SAMA PERSIS dengan yang dibangun
+  # `docker-compose.prod.yml` (`${WEB_IMAGE:-kantongz-web:latest}`). Yang
+  # membangun terakhir menang, diam-diam.
+  #
+  # Akibatnya terukur: bundel klien dev berisi `https://localhost` yang
+  # dipanggang dari `PUBLIC_API_URL` milik produksi, peramban menolak
+  # sertifikatnya (`ERR_CERT_AUTHORITY_INVALID`), dan SETIAP panggilan buku
+  # besar gagal — sementara kontainernya tetap melaporkan diri "healthy".
+  #
+  # `NEXT_PUBLIC_*` dipanggang saat build, jadi satu tag bersama untuk dua
+  # konfigurasi build adalah cacat, bukan penghematan.
   web:
+    image: ${WEB_IMAGE_DEV:-kantongz-web:dev}
     build:
       context: ../kantongz-web
       args:
