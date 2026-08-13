@@ -433,17 +433,45 @@ async function readGrace(deps: AuthDeps, hash: Buffer): Promise<RotationResult |
 }
 
 /** Berapa lama menunggu pemenang balapan menulis hasilnya ke cache grace. */
-const RACE_WAIT_MS = 150;
+const RACE_WAIT_MS = 2_000;
 const RACE_POLL_MS = 15;
 
 /**
  * Menunggu sebentar entri grace muncul.
  *
- * Batasnya sengaja pendek dan tetap: yang ditunggu adalah celah antara satu
- * INSERT dan satu SET Redis di proses yang sama, bukan pekerjaan lambat. Batas
- * yang panjang akan mengubah cabang ini menjadi tempat permintaan menumpuk saat
- * Redis benar-benar jatuh — dan saat Redis jatuh, jawabannya memang harus
- * datang cepat.
+ * Yang ditunggu adalah celah antara satu INSERT dan satu SET Redis di proses
+ * yang sama. Batas ini SEBELUMNYA 150 ms, dengan alasan bahwa celah itu selalu
+ * pendek — dan alasan itu terbantah oleh pengukuran.
+ *
+ * ── MENGAPA 150 MS TIDAK CUKUP ─────────────────────────────────────────
+ *
+ * Uji `concurrency.test.ts` — sepuluh penyegaran serentak, lalu memakai token
+ * yang terbit — GAGAL kira-kira satu dari enam kali saat SELURUH rangkaian
+ * berjalan, dan lulus 5 dari 5 kali saat dijalankan sendirian. Selisihnya hanya
+ * beban mesin. Di bawah beban, INSERT pemenang melewati 150 ms, `awaitGrace`
+ * menyerah, dan aliran jatuh ke `revoke_family`.
+ *
+ * Akibatnya persis yang diperingatkan komentar di bawah: seluruh keluarga token
+ * dicabut, pengguna keluar tanpa melakukan kesalahan, dan sebuah
+ * `refresh_reuse_detected` PALSU tercatat — kejadian yang §21 Tahap 4 tuntut
+ * NOL sebelum peluncuran. Kegagalan yang muncul justru saat peladen sibuk
+ * adalah kegagalan yang akan terjadi di produksi, bukan di laptop.
+ *
+ * ── MENGAPA MEMPERPANJANGNYA TIDAK MELEMAHKAN APA PUN ──────────────────
+ *
+ * Cabang ini hanya tercapai ketika pemanggilnya sudah memastikan
+ * `now - rotatedAt < GRACE_WINDOW_MS` (10 detik) — batas keamanan itu TIDAK
+ * berubah. Pencuri yang memakai token lama sesudah jendela itu lewat tidak
+ * pernah sampai ke sini, dan hasil yang akhirnya disajikan adalah hasil yang
+ * `decideRotation` sudah putuskan boleh disajikan.
+ *
+ * Kekhawatiran lama — "saat Redis jatuh, jawabannya harus datang cepat" — juga
+ * tidak berlaku di sini: Redis yang jatuh membuat `cacheHealthy` bernilai salah,
+ * dan `decideRotation` mengembalikan `rotate_degraded` SEBELUM cabang ini.
+ * Menunggu di sini hanya terjadi ketika Redis sehat dan tulisannya belum tiba.
+ *
+ * 2 detik memberi ~13× ruang di atas kegagalan 150 ms yang teramati, sambil
+ * tetap lima kali lipat di dalam jendela grace.
  */
 async function awaitGrace(deps: AuthDeps, hash: Buffer): Promise<RotationResult | null> {
   const deadline = Date.now() + RACE_WAIT_MS;
