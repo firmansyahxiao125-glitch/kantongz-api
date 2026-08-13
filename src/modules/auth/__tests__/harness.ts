@@ -164,6 +164,31 @@ export async function createHarness(): Promise<Harness> {
     JWT_PUBLIC_KEY: pair.publicKey,
     MASTER_KEY: 'rahasia-induk-uji-yang-cukup-panjang',
     HMAC_KEY_VERSION: '1',
+
+    /*
+     * MODEL LOKAL SENGAJA DIMATIKAN DI UJI.
+     *
+     * Tanpa baris ini, `OLLAMA_BASE_URL` memakai bawaannya —
+     * `http://localhost:11434` — dan `modelFor` MEMPROBE alamat itu sungguhan
+     * saat merakit aplikasi uji. Akibatnya hasil uji ditentukan oleh apa yang
+     * kebetulan berjalan di mesin yang menjalankannya:
+     *
+     *   tanpa Ollama  -> narrativeSource 'template'  -> hijau
+     *   dengan Ollama -> narrativeSource 'model'     -> merah
+     *
+     * Itu benar-benar terjadi: seluruh rangkaian hijau selama berbulan-bulan,
+     * lalu memerah pada commit yang tidak menyentuh satu baris pun kode
+     * asisten — yang berubah hanya bahwa Ollama akhirnya terpasang di laptop.
+     * Uji yang jawabannya bergantung pada layanan ambien tidak menguji kode;
+     * ia menguji mesinnya, dan ia akan berbeda antara laptop dan CI.
+     *
+     * Porta 1 menolak sambungan seketika di Windows, macOS, maupun Linux, jadi
+     * probenya pasti gagal TANPA menunggu batas waktu.
+     *
+     * Jalur model yang HIDUP diuji terpisah di `assistant/__tests__/ollama.ts`
+     * dengan `fetch` palsu — di sana modelnya dikendalikan, bukan ditebak.
+     */
+    OLLAMA_BASE_URL: 'http://127.0.0.1:1',
   });
 
   const logger = createLogger(config);
