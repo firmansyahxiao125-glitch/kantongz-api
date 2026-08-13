@@ -29,3 +29,8 @@ deploy/backup/*.dump
 # Lingkungan uji pemulihan sementara.
 .env.restoretest
 deploy/backup-test/
+
+# Model bahasa Tesseract, diunduh sendiri oleh `tesseract.js` ke direktori kerja
+# pada pemakaian OCR pertama (`createWorker` di `src/modules/receipt/reader.ts`).
+# Regenerable, dan bersama-sama berukuran ~7 MB — artefak runtime, bukan sumber.
+*.traineddata
