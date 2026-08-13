@@ -1,0 +1,75 @@
+# Override PEMBUKTIAN LOKAL — jangan pernah dipakai di server sungguhan.
+#
+# ── MENGAPA BERKAS TERPISAH, BUKAN TAMBAHAN DI docker-compose.prod.yml ──
+#
+# `docker-compose.prod.yml` baris 22 menyatakan aturannya sendiri: "Mailpit
+# TIDAK ADA. Produksi memakai SMTP sungguhan." Aturan itu benar dan tidak boleh
+# dilemahkan — susunan produksi yang membawa penangkap email adalah susunan yang
+# suatu saat MENELAN email pengguna sungguhan alih-alih mengirimnya, dan
+# kegagalan itu senyap: pengguna tidak pernah menerima kode verifikasinya, dan
+# tidak ada satu pun yang merah di layar operator.
+#
+# Yang dipecahkan berkas ini adalah masalah lain: alur email di susunan
+# PRODUKSI LOKAL belum pernah terbukti sama sekali. Dev punya Mailpit, produksi
+# tidak, jadi jalur SMTP produksi — kode yang benar-benar berjalan di balik
+# Caddy, dengan konfigurasi produksi — tidak pernah dijalankan satu kali pun.
+#
+# Memisahkannya ke berkas override membuat kedua hal itu benar sekaligus:
+# produksi tetap tidak punya Mailpit, dan jalurnya tetap dapat dibuktikan.
+#
+# ── CARA PAKAI ─────────────────────────────────────────────────────────
+#
+#   docker compose --env-file .env.prod \
+#     -f docker-compose.prod.yml -f docker-compose.prod.local.yml up -d
+#
+# Kotak masuk: http://localhost:8026
+#
+# Menjalankan `docker-compose.prod.yml` SENDIRIAN tetap menghasilkan susunan
+# produksi apa adanya — berkas ini harus disebut eksplisit untuk berlaku, dan
+# tidak ada nama bawaan yang membuatnya ikut terbaca tanpa diminta.
+
+services:
+  # Penangkap email. Tidak pernah meneruskan ke mana pun — setiap pesan berhenti
+  # di sini dan dapat dibaca lewat antarmuka web maupun API-nya.
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    environment:
+      MP_MAX_MESSAGES: '500'
+      # Menerima tanpa autentikasi dan tanpa TLS. Itu SAH untuk penangkap
+      # lokal, dan justru itu yang membedakannya dari relay sungguhan.
+      MP_SMTP_AUTH_ACCEPT_ANY: 'true'
+      MP_SMTP_AUTH_ALLOW_INSECURE: 'true'
+    ports:
+      # 8026, BUKAN 8025. Susunan pengembangan (`docker-compose.yml`) sudah
+      # memegang 1025 dan 8025 di host, dan keduanya kerap berjalan bersamaan
+      # di mesin yang sama. Porta yang bentrok membuat salah satu susunan gagal
+      # naik dengan pesan yang tidak menyebut sebabnya.
+      #
+      # Porta SMTP-nya SENGAJA tidak dipetakan ke host: yang perlu menjangkaunya
+      # hanya `api`, dan itu terjadi di dalam jaringan compose.
+      - '8026:8025'
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:8025/readyz']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  api:
+    depends_on:
+      mailpit: { condition: service_healthy }
+    environment:
+      # Menimpa nilai dari `.env.prod`, dan ketiganya HARUS ikut berubah
+      # bersama-sama:
+      #
+      #   SMTP_HOST   `.env.prod` menunjuk `mailpit-test`, host yang tidak
+      #               pernah ada — jadi pengiriman selalu gagal menyambung.
+      #   SMTP_PORT   587 adalah porta submission ber-TLS. Mailpit menerima
+      #               SMTP polos di 1025.
+      #   SMTP_SECURE 587 di `.env.prod` dipasangkan `true`. Menyambung dengan
+      #               TLS ke pendengar polos menggantung sampai batas waktu,
+      #               bukan gagal cepat — dan gejalanya terlihat seperti
+      #               jaringan lambat, bukan seperti salah konfigurasi.
+      SMTP_HOST: mailpit
+      SMTP_PORT: '1025'
+      SMTP_SECURE: 'false'
