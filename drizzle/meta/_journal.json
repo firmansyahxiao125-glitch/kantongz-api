@@ -15,6 +15,13 @@
       "when": 1786061918261,
       "tag": "0001_opposite_la_nuit",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786247553006,
+      "tag": "0002_warna_kategori_sistem",
+      "breakpoints": true
     }
   ]
 }
