@@ -11,7 +11,7 @@ import type { Database } from '../../platform/db/client.js';
 import { categories, transactions } from '../../platform/db/ledger.js';
 import { DomainError } from '../../contracts/domain.js';
 import * as ledger from '../ledger/repository.js';
-import { daysBack } from '../ledger/periods.js';
+import { daysBack, periodStart } from '../ledger/periods.js';
 import { findAmountAnomalies, findSubscriptions, monthlyCost } from './anomaly.js';
 import { projectCashflow, daysUntilEmpty } from './forecast.js';
 import { matchRule } from './rules.js';
@@ -237,12 +237,49 @@ export async function digest(
     });
   }
 
-  /* ── anggaran berisiko ── */
-  const range = daysBack(1, now);
-  const spent = await ledger.spentPerCategory(deps.db, userId, daysBack(30, now).from, range.to);
+  /*
+   * ── anggaran berisiko ──
+   *
+   * TERPAKAI DIHITUNG PER PERIODE MASING-MASING ANGGARAN.
+   *
+   * Sebelumnya baris ini memakai satu jendela bergulir 30 hari untuk SEMUA
+   * anggaran, lalu menyebut hasilnya "% batas periode berjalan". Keduanya tidak
+   * pernah bisa benar sekaligus, dan akibatnya terukur di peramban:
+   *
+   *   halaman Anggaran : Belanja Rp 1.739.000 / Rp 1.200.000  (145%)
+   *   halaman Wawasan  : "Sudah Rp 2.049.000 dari batas Rp 1.200.000" (171%)
+   *
+   * Satu anggaran, dua angka, dan keduanya mengaku periode berjalan. Selisih
+   * Rp 310.000 itu satu transaksi berumur 28 hari — di dalam jendela 30 hari,
+   * di luar bulan berjalan.
+   *
+   * Bagi anggaran MINGGUAN cacatnya jauh lebih parah daripada tidak konsisten:
+   * pengeluaran sebulan diadu dengan batas sepekan, jadi anggaran mingguan yang
+   * sehat pun dilaporkan jebol SELAMANYA. Peringatan yang selalu menyala adalah
+   * peringatan yang berhenti dibaca — dan ia menyeret seluruh halaman Wawasan
+   * ikut tidak dipercaya.
+   *
+   * `ledger/service.ts` sudah menuliskan aturannya dan alasannya persis sama
+   * ("Anggaran mingguan yang diukur terhadap pengeluaran sebulan akan selalu
+   * terlihat jebol") — modul ini mengimpor REPOSITORY, jadi `spent` yang sudah
+   * benar itu tidak pernah ikut sampai ke sini. Yang diperbaiki: memakai
+   * jendela yang sama, bukan menyalin angkanya.
+   *
+   * Satu kueri per PERIODE UNIK, bukan per anggaran — sepuluh anggaran bulanan
+   * tetap satu kueri.
+   */
+  const terpakaiPerPeriode = new Map<string, Map<string, number>>();
+  for (const budget of budgets) {
+    if (terpakaiPerPeriode.has(budget.period)) continue;
+    const periode = periodStart(budget.period, now);
+    terpakaiPerPeriode.set(
+      budget.period,
+      await ledger.spentPerCategory(deps.db, userId, periode.from, periode.to),
+    );
+  }
 
   for (const budget of budgets) {
-    const terpakai = spent.get(budget.categoryId) ?? 0;
+    const terpakai = terpakaiPerPeriode.get(budget.period)?.get(budget.categoryId) ?? 0;
     const ratio = terpakai / budget.amount;
     if (ratio < BUDGET_WARN_RATIO) continue;
 
