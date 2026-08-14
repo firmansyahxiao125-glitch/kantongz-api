@@ -42,6 +42,29 @@ export interface PendingVerification {
 }
 
 /** Identitas perangkat yang menyertai setiap permintaan auth. M3_SPEC §17. */
+/**
+ * Satu sesi yang masih terbuka, sebagaimana dilihat PEMILIKNYA.
+ *
+ * Bentuknya sengaja tidak memuat apa pun yang dapat dipakai menyalahgunakan
+ * sesi lain: tidak ada token, tidak ada `deviceHash`, tidak ada alamat IP.
+ * Yang ditampilkan hanyalah yang dibutuhkan seseorang untuk menjawab satu
+ * pertanyaan — "apakah ini aku?" — lalu menindaknya.
+ *
+ * `current` menandai sesi yang sedang dipakai permintaan ini. Tanpa penanda
+ * itu, daftar berisi tiga baris serupa dan pengguna yang ingin mengakhiri sesi
+ * asing punya peluang besar mengakhiri sesinya sendiri.
+ */
+export interface ActiveSession {
+  id: string;
+  platform: string;
+  model: string | null;
+  appVersion: string | null;
+  createdAt: number;
+  lastSeenAt: number;
+  absoluteExpiresAt: number;
+  current: boolean;
+}
+
 export interface DeviceInfo {
   deviceId: string;
   platform: 'ios' | 'android' | 'web';

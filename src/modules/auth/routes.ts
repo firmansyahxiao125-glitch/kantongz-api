@@ -146,15 +146,49 @@ export function registerAuthRoutes(app: App, deps: RouteDeps): void {
     void reply.send(success({}, request.requestId));
   });
 
-  app.get('/v1/auth/me', async (request, reply) => {
+  /* Satu tempat yang menerjemahkan header menjadi klaim terverifikasi.
+     Disalin di tiap rute, satu di antaranya cepat atau lambat lupa
+     memverifikasi tanda tangannya. */
+  async function callerClaims(request: { headers: Record<string, unknown> }) {
     const header = request.headers.authorization;
     if (typeof header !== 'string' || !header.startsWith('Bearer ')) {
       throw new AppError('session_expired');
     }
+    return verifyAccessToken(deps.ring, deps.issuer, header.slice(7));
+  }
 
-    const claims = await verifyAccessToken(deps.ring, deps.issuer, header.slice(7));
+  app.get('/v1/auth/me', async (request, reply) => {
+    const claims = await callerClaims(request);
     const user = await service.currentUser(deps, claims.sub);
     void reply.send(success(user, request.requestId));
+  });
+
+  /*
+   * Sesi aktif milik pemanggil.
+   *
+   * `sid` diambil dari klaim token, bukan dari badan permintaan. Membiarkan
+   * klien menyebut sesinya sendiri berarti membiarkannya menandai sesi ORANG
+   * LAIN sebagai "ini aku" — dan penanda itulah yang dipakai antarmuka untuk
+   * memutuskan mana yang aman diakhiri.
+   */
+  app.get('/v1/auth/sessions', async (request, reply) => {
+    const claims = await callerClaims(request);
+    void reply.send(
+      success(await service.listSessions(deps, claims.sub, claims.sid), request.requestId),
+    );
+  });
+
+  /*
+   * Mengakhiri satu sesi. Kepemilikan diperiksa di service, dan sesi milik
+   * orang lain dijawab `not_found` — bukan `forbidden` — supaya penebak id
+   * tidak memperoleh konfirmasi bahwa id itu ada.
+   */
+  app.delete<{ Params: { id: string } }>('/v1/auth/sessions/:id', async (request, reply) => {
+    const claims = await callerClaims(request);
+    await service.revokeSession(deps, claims.sub, request.params.id, {
+      requestId: request.requestId,
+    });
+    void reply.send(success({}, request.requestId));
   });
 
   /** §4.3 — kunci publik, di-cache sepuluh menit oleh gateway. */

@@ -1,7 +1,9 @@
 import type { Redis } from 'ioredis';
 
+import { DomainError } from '../../contracts/domain.js';
 import { AppError } from '../../contracts/errors.js';
 import type {
+  ActiveSession,
   DeviceInfo,
   PendingVerification,
   Session,
@@ -722,6 +724,91 @@ export async function signOut(
     severity: 'info',
     actorId: session?.userId ?? null,
     targetId: stored.sessionId,
+    requestId: ctx.requestId,
+  });
+}
+
+/**
+ * Sesi yang masih terbuka milik satu pengguna.
+ *
+ * ── MENGAPA INI PENTING, BUKAN SEKADAR DAFTAR ──────────────────────────
+ *
+ * Rotasi refresh token, jendela grace, dan deteksi pemakaian ulang sudah
+ * bekerja sejak lama — dan seluruhnya TIDAK TERLIHAT. Pengguna yang curiga
+ * akunnya dipakai orang lain tidak punya satu pun cara memeriksanya, apalagi
+ * menghentikannya, selain mengganti kata sandi dan mengeluarkan SEMUA
+ * perangkat termasuk miliknya sendiri.
+ *
+ * Daftar ini mengubah mekanisme yang sudah ada menjadi sesuatu yang dapat
+ * ditindak: lihat, kenali, akhiri satu saja.
+ *
+ * Perangkat disatukan di sini karena `sessions` hanya menyimpan `deviceId`.
+ * Sebuah id mentah tidak menjawab pertanyaan yang ingin dijawab pengguna;
+ * "web · Chrome" menjawabnya.
+ */
+export async function listSessions(
+  deps: AuthDeps,
+  userId: string,
+  currentSessionId: string,
+): Promise<ActiveSession[]> {
+  const [open, devices] = await Promise.all([
+    repo.listOpenSessions(deps.db, userId),
+    repo.listDevices(deps.db, userId),
+  ]);
+
+  const byDevice = new Map(devices.map((d) => [d.id, d]));
+
+  return open
+    .map((s) => {
+      const d = byDevice.get(s.deviceId);
+      return {
+        id: s.id,
+        platform: d?.platform ?? 'tidak diketahui',
+        model: d?.model ?? null,
+        appVersion: d?.appVersion ?? null,
+        createdAt: s.createdAt.getTime(),
+        lastSeenAt: s.lastSeenAt.getTime(),
+        absoluteExpiresAt: s.absoluteExpiresAt.getTime(),
+        current: s.id === currentSessionId,
+      };
+    })
+    /* Terbaru dipakai lebih dulu: yang paling mungkin dicari pengguna —
+       sesuatu yang aktif barusan dan bukan miliknya — ada di puncak. */
+    .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+}
+
+/**
+ * Mengakhiri SATU sesi.
+ *
+ * KEPEMILIKAN DIPERIKSA, dan itu bukan formalitas: tanpa pemeriksaan ini rute
+ * `DELETE /v1/auth/sessions/:id` menjadi alat untuk mengeluarkan pengguna lain
+ * dari akunnya sendiri hanya dengan menebak id. Sesi milik orang lain dijawab
+ * `not_found`, BUKAN `forbidden` — membedakan keduanya memberi tahu penebak
+ * bahwa id yang ia coba benar-benar ada.
+ *
+ * Pencabutannya memakai `revokeFamily`, jalur yang sama persis dengan
+ * sign-out: ia mencabut seluruh keluarga refresh token DAN menutup sesinya,
+ * sehingga sesi yang diakhiri benar-benar hilang dari daftar ini alih-alih
+ * tetap tampil terbuka dengan token yang masih hidup.
+ */
+export async function revokeSession(
+  deps: AuthDeps,
+  userId: string,
+  sessionId: string,
+  ctx: RequestContext,
+): Promise<void> {
+  const session = await repo.findSession(deps.db, sessionId);
+  if (!session || session.userId !== userId || session.closedAt !== null) {
+    throw new DomainError('not_found', 'sesi tidak ditemukan');
+  }
+
+  await repo.revokeFamily(deps.db, sessionId, 'revoked_by_user');
+
+  await audit(deps, {
+    event: 'session_revoked',
+    severity: 'info',
+    actorId: userId,
+    targetId: sessionId,
     requestId: ctx.requestId,
   });
 }

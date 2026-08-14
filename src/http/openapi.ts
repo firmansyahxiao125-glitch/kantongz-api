@@ -171,6 +171,31 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
           },
         },
 
+        /* Sengaja TIDAK memuat token, deviceHash, maupun alamat IP: yang
+           ditampilkan hanya yang dibutuhkan pemiliknya untuk menjawab
+           "apakah ini aku?" lalu menindaknya. */
+        ActiveSession: {
+          type: 'object',
+          required: [
+            'id', 'platform', 'model', 'appVersion',
+            'createdAt', 'lastSeenAt', 'absoluteExpiresAt', 'current',
+          ],
+          additionalProperties: false,
+          properties: {
+            id: { type: 'string' },
+            platform: { type: 'string' },
+            model: { type: 'string', nullable: true },
+            appVersion: { type: 'string', nullable: true },
+            createdAt: { type: 'integer', description: 'epoch ms' },
+            lastSeenAt: { type: 'integer', description: 'epoch ms' },
+            absoluteExpiresAt: { type: 'integer', description: 'epoch ms' },
+            current: {
+              type: 'boolean',
+              description: 'sesi yang sedang dipakai permintaan ini',
+            },
+          },
+        },
+
         AuthTokens: {
           type: 'object',
           required: ['accessToken', 'refreshToken', 'accessTokenExpiresAt'],
@@ -895,6 +920,40 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
           responses: {
             '200': { description: 'pengguna', content: json(envelope(ref('User'))) },
             ...errors('session_expired'),
+          },
+        },
+      },
+
+      '/v1/auth/sessions': {
+        get: {
+          tags: ['autentikasi'],
+          summary: 'Sesi yang masih terbuka milik pemanggil',
+          security: SECURED,
+          responses: {
+            '200': {
+              description: 'sesi aktif, terbaru dipakai lebih dulu',
+              content: json(envelope({ type: 'array', items: ref('ActiveSession') })),
+            },
+            ...errors('session_expired'),
+          },
+        },
+      },
+
+      '/v1/auth/sessions/{id}': {
+        delete: {
+          tags: ['autentikasi'],
+          summary: 'Mengakhiri satu sesi',
+          description:
+            'Mencabut seluruh keluarga refresh token sesi itu dan menutupnya. Sesi milik ' +
+            'pengguna lain dijawab 404 — bukan 403 — supaya penebak id tidak memperoleh ' +
+            'konfirmasi bahwa id yang dicobanya ada.',
+          security: SECURED,
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            '200': { description: 'sesi diakhiri', content: json(envelope({ type: 'object' })) },
+            ...errors('session_expired', 'not_found'),
           },
         },
       },
