@@ -20,6 +20,7 @@
     "e2e": "bash scripts/e2e.sh",
     "verify": "bash scripts/verify-standalone.sh",
     "loadtest": "node scripts/loadtest.mjs",
+    "security": "node scripts/security.mjs",
     "check:templates": "node scripts/check-templates.mjs"
   },
   "dependencies": {
