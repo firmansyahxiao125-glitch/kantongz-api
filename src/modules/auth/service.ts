@@ -11,6 +11,9 @@ import type {
 } from '../../contracts/auth.js';
 import type { Database } from '../../platform/db/client.js';
 import {
+  encryptColumn,
+  decryptColumn,
+  sha256,
   hashPassword,
   isGhostTicket,
   issueGhostTicket,
@@ -32,6 +35,13 @@ import {
   refreshExpiryFor,
 } from '../tokens/refresh.js';
 import * as repo from './repository.js';
+import {
+  generateRecoveryCodes,
+  generateSecret,
+  normaliseRecoveryCode,
+  otpauthUri,
+  verify as verifyTotp,
+} from './totp.js';
 import {
   checkLock,
   clearFailures,
@@ -163,7 +173,7 @@ async function grantSession(
 
 export async function signIn(
   deps: AuthDeps,
-  input: { email: string; password: string; device: DeviceInfo },
+  input: { email: string; password: string; device: DeviceInfo; totpCode?: string | undefined },
   ctx: RequestContext,
 ): Promise<Session> {
   const email = repo.normaliseEmail(input.email);
@@ -218,6 +228,55 @@ export async function signIn(
   /* Akun yang belum terverifikasi tidak bisa dipakai masuk. §3.2 */
   if (account.row.status === 'pending_verification') throw new AppError('invalid_credentials');
   if (account.row.status !== 'active') throw new AppError('rate_limited', 'akun tidak aktif', 3600);
+
+  /*
+   * FAKTOR KEDUA — diperiksa SESUDAH kata sandi, dan sebelum sesi apa pun
+   * diterbitkan.
+   *
+   * Urutannya menentukan. Memeriksa TOTP lebih dulu memberitahu penyerang
+   * apakah alamat itu punya 2FA sebelum ia membuktikan tahu kata sandinya, dan
+   * itu memilah daftar target untuknya. Menerbitkan sesi lalu memintanya
+   * kemudian jauh lebih buruk: sesi setengah jadi adalah sesi yang sah.
+   *
+   * Kegagalan di sini dihitung sebagai kegagalan masuk, sehingga pembatas
+   * percobaan yang sama menjaga tebakan enam digit — tanpa itu, kode enam
+   * digit hanya sejuta kemungkinan dan dapat dihabiskan.
+   */
+  const dua = await repo.findTotp(deps.db, account.row.id);
+  if (dua?.enabledAt && dua.secretEncrypted) {
+    const diberi = input.totpCode?.trim() ?? '';
+    if (diberi.length === 0) throw new AppError('totp_required');
+
+    const secret = decryptColumn(deps.keys, dua.secretEncrypted);
+    const kodeCocok = verifyTotp(secret, diberi);
+
+    /* Kode pemulihan diterima di kolom yang sama. Menuntut pengguna yang baru
+       kehilangan ponselnya menemukan layar yang berbeda adalah menambah
+       rintangan tepat pada saat ia paling kesulitan. */
+    const pemulihanCocok =
+      kodeCocok ||
+      (await repo.consumeRecoveryCode(
+        deps.db,
+        account.row.id,
+        sha256(normaliseRecoveryCode(diberi)),
+      ));
+
+    if (!kodeCocok && !pemulihanCocok) {
+      const after = await recordFailure(deps.redis, email);
+      await audit(deps, {
+        event: 'totp_failed',
+        severity: 'warning',
+        actorId: account.row.id,
+        requestId: ctx.requestId,
+        ip: ctx.ip,
+        userAgent: ctx.userAgent,
+      });
+      if (after.locked) {
+        throw new AppError('rate_limited', 'terkunci sementara', after.retryAfterSeconds);
+      }
+      throw new AppError('invalid_credentials');
+    }
+  }
 
   await clearFailures(deps.redis, email);
 
@@ -763,6 +822,116 @@ export async function signOut(
     targetId: stored.sessionId,
     requestId: ctx.requestId,
   });
+}
+
+/* ── faktor kedua (TOTP) ─────────────────────────────────────────────── */
+
+/**
+ * Memulai pendaftaran 2FA.
+ *
+ * Rahasianya dibuat dan disimpan SEKARANG, tetapi 2FA belum berlaku: penanda
+ * aktifnya baru disetel sesudah pengguna membuktikan ia dapat membaca kode dari
+ * aplikasinya. Memisahkan keduanya mencegah kegagalan yang paling merugikan —
+ * akun terkunci oleh faktor kedua yang tidak pernah berhasil dipindai.
+ *
+ * Memanggil ulang saat 2FA belum aktif akan MENGGANTI rahasia yang belum jadi.
+ * Itu disengaja: pengguna yang menutup halaman di tengah jalan harus dapat
+ * mengulang dari awal tanpa terjebak rahasia yang tidak ada di aplikasinya.
+ */
+export async function startTotpEnrolment(
+  deps: AuthDeps,
+  userId: string,
+): Promise<{ secret: string; otpauthUri: string }> {
+  const account = await repo.findAccountById(deps.db, deps.keys, userId);
+  if (!account) throw new AppError('session_expired');
+
+  const existing = await repo.findTotp(deps.db, userId);
+  if (existing?.enabledAt) throw new DomainError('conflict', '2FA sudah aktif');
+
+  const secret = generateSecret();
+  await repo.saveTotpSecret(deps.db, userId, encryptColumn(deps.keys, secret));
+
+  return { secret, otpauthUri: otpauthUri(secret, account.user.email) };
+}
+
+/**
+ * Menyelesaikan pendaftaran 2FA, dan menerbitkan kode pemulihan.
+ *
+ * Kode pemulihan dikembalikan SEKALI, di sini, dan tidak pernah dapat dibaca
+ * lagi — yang tersimpan hanya hash-nya. Antarmuka wajib memaksa pengguna
+ * menyimpannya sebelum melanjutkan.
+ */
+export async function confirmTotpEnrolment(
+  deps: AuthDeps,
+  userId: string,
+  kode: string,
+  ctx: RequestContext,
+): Promise<{ recoveryCodes: string[] }> {
+  const row = await repo.findTotp(deps.db, userId);
+  if (!row?.secretEncrypted) throw new DomainError('not_found', 'pendaftaran 2FA belum dimulai');
+  if (row.enabledAt) throw new DomainError('conflict', '2FA sudah aktif');
+
+  const secret = decryptColumn(deps.keys, row.secretEncrypted);
+  if (!verifyTotp(secret, kode)) throw new AppError('invalid_credentials');
+
+  const codes = generateRecoveryCodes();
+  await repo.replaceRecoveryCodes(
+    deps.db,
+    userId,
+    codes.map((c) => sha256(normaliseRecoveryCode(c))),
+  );
+  await repo.enableTotp(deps.db, userId);
+
+  await audit(deps, {
+    event: 'totp_enabled',
+    severity: 'info',
+    actorId: userId,
+    requestId: ctx.requestId,
+  });
+
+  return { recoveryCodes: codes };
+}
+
+/**
+ * Mematikan 2FA.
+ *
+ * KATA SANDI DIMINTA LAGI, dan itu bukan formalitas: tanpa itu, siapa pun yang
+ * menemukan perangkat tidak terkunci dapat melepas faktor kedua dalam satu
+ * ketukan — dan faktor kedua yang dapat dilepas tanpa faktor pertama tidak
+ * menjaga apa pun.
+ */
+export async function disableTotp(
+  deps: AuthDeps,
+  userId: string,
+  password: string,
+  ctx: RequestContext,
+): Promise<void> {
+  const account = await repo.findAccountById(deps.db, deps.keys, userId);
+  if (!account) throw new AppError('session_expired');
+
+  if (!(await verifyPassword(account.row.passwordHash, password))) {
+    throw new AppError('invalid_credentials');
+  }
+
+  await repo.disableTotp(deps.db, userId);
+
+  await audit(deps, {
+    event: 'totp_disabled',
+    severity: 'warning',
+    actorId: userId,
+    requestId: ctx.requestId,
+  });
+}
+
+export async function totpStatus(
+  deps: AuthDeps,
+  userId: string,
+): Promise<{ enabled: boolean; recoveryCodesLeft: number }> {
+  const row = await repo.findTotp(deps.db, userId);
+  return {
+    enabled: Boolean(row?.enabledAt),
+    recoveryCodesLeft: row?.enabledAt ? await repo.countUnusedRecoveryCodes(deps.db, userId) : 0,
+  };
 }
 
 /**

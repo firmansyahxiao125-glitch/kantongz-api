@@ -27,6 +27,16 @@ export interface Session {
 export interface Credentials {
   email: string;
   password: string;
+  /**
+   * Kode faktor kedua, atau salah satu kode pemulihan.
+   *
+   * Keduanya diterima di kolom yang SAMA: pengguna yang baru kehilangan
+   * ponselnya tidak seharusnya diminta menemukan layar yang berbeda.
+   *
+   * Opsional karena sebagian besar akun tidak memakai 2FA — dan klien memang
+   * belum tahu apakah akun ini memakainya sampai kata sandinya terbukti benar.
+   */
+  totpCode?: string | undefined;
 }
 
 export interface RegistrationInput {

@@ -3,6 +3,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { Database } from '../../platform/db/client.js';
 import {
   devices,
+  recoveryCodes,
   refreshTokens,
   sessions,
   tickets,
@@ -214,6 +215,102 @@ export async function listDevices(db: Database, userId: string) {
     })
     .from(devices)
     .where(eq(devices.userId, userId));
+}
+
+/* ── faktor kedua ────────────────────────────────────────────────────── */
+
+/** Rahasia TOTP disimpan TERENKRIPSI; hanya service yang membukanya. */
+export async function saveTotpSecret(
+  db: Database,
+  userId: string,
+  secretEncrypted: Buffer,
+): Promise<void> {
+  await db
+    .update(users)
+    .set({ totpSecretEncrypted: secretEncrypted, totpEnabledAt: null, updatedAt: new Date() })
+    .where(eq(users.id, userId));
+}
+
+/** Mengaktifkan 2FA. Dipisah dari penyimpanan rahasia: rahasia lahir saat
+ *  enrol dimulai, tetapi baru BERLAKU sesudah pengguna membuktikan ia dapat
+ *  membaca kodenya. */
+export async function enableTotp(db: Database, userId: string): Promise<void> {
+  await db
+    .update(users)
+    .set({ totpEnabledAt: new Date(), updatedAt: new Date() })
+    .where(eq(users.id, userId));
+}
+
+/** Mematikan 2FA DAN membuang rahasianya. Menyisakan rahasia yang tidak aktif
+ *  berarti menyimpan bahan kunci yang tidak menjaga apa pun. */
+export async function disableTotp(db: Database, userId: string): Promise<void> {
+  await db
+    .update(users)
+    .set({ totpSecretEncrypted: null, totpEnabledAt: null, updatedAt: new Date() })
+    .where(eq(users.id, userId));
+  await db.delete(recoveryCodes).where(eq(recoveryCodes.userId, userId));
+}
+
+export async function findTotp(
+  db: Database,
+  userId: string,
+): Promise<{ secretEncrypted: Buffer | null; enabledAt: Date | null } | null> {
+  const rows = await db
+    .select({ secretEncrypted: users.totpSecretEncrypted, enabledAt: users.totpEnabledAt })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+
+  return rows[0] ?? null;
+}
+
+/** Mengganti SELURUH kode pemulihan. Enrol ulang harus membatalkan kertas lama. */
+export async function replaceRecoveryCodes(
+  db: Database,
+  userId: string,
+  hashes: Buffer[],
+): Promise<void> {
+  await db.delete(recoveryCodes).where(eq(recoveryCodes.userId, userId));
+  if (hashes.length === 0) return;
+  await db
+    .insert(recoveryCodes)
+    .values(hashes.map((codeHash) => ({ id: newId('rcv'), userId, codeHash })));
+}
+
+/**
+ * Memakai satu kode pemulihan, sekali saja.
+ *
+ * Penandaan terpakai dilakukan dalam SATU pernyataan dengan syarat
+ * `used_at IS NULL`, dan keberhasilannya diukur dari jumlah baris terpengaruh.
+ * Membaca lalu menulis terpisah adalah balapan: dua permintaan dengan kode yang
+ * sama dapat sama-sama membaca "belum terpakai" dan keduanya diterima.
+ */
+export async function consumeRecoveryCode(
+  db: Database,
+  userId: string,
+  codeHash: Buffer,
+): Promise<boolean> {
+  const terpakai = await db
+    .update(recoveryCodes)
+    .set({ usedAt: new Date() })
+    .where(
+      and(
+        eq(recoveryCodes.userId, userId),
+        eq(recoveryCodes.codeHash, codeHash),
+        isNull(recoveryCodes.usedAt),
+      ),
+    )
+    .returning({ id: recoveryCodes.id });
+
+  return terpakai.length > 0;
+}
+
+export async function countUnusedRecoveryCodes(db: Database, userId: string): Promise<number> {
+  const rows = await db
+    .select({ id: recoveryCodes.id })
+    .from(recoveryCodes)
+    .where(and(eq(recoveryCodes.userId, userId), isNull(recoveryCodes.usedAt)));
+  return rows.length;
 }
 
 /* ── sesi dan token ──────────────────────────────────────────────────── */

@@ -171,6 +171,35 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
           },
         },
 
+        TotpStatus: {
+          type: 'object',
+          required: ['enabled', 'recoveryCodesLeft'],
+          additionalProperties: false,
+          properties: {
+            enabled: { type: 'boolean' },
+            recoveryCodesLeft: { type: 'integer' },
+          },
+        },
+
+        TotpSetup: {
+          type: 'object',
+          required: ['secret', 'otpauthUri'],
+          additionalProperties: false,
+          properties: {
+            secret: { type: 'string', description: 'base32, untuk dimasukkan manual' },
+            otpauthUri: { type: 'string', description: 'untuk dijadikan kode QR' },
+          },
+        },
+
+        RecoveryCodes: {
+          type: 'object',
+          required: ['recoveryCodes'],
+          additionalProperties: false,
+          properties: {
+            recoveryCodes: { type: 'array', items: { type: 'string' } },
+          },
+        },
+
         /* Sengaja TIDAK memuat token, deviceHash, maupun alamat IP: yang
            ditampilkan hanya yang dibutuhkan pemiliknya untuk menjawab
            "apakah ini aku?" lalu menindaknya. */
@@ -920,6 +949,82 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
           responses: {
             '200': { description: 'pengguna', content: json(envelope(ref('User'))) },
             ...errors('session_expired'),
+          },
+        },
+      },
+
+      '/v1/auth/totp': {
+        get: {
+          tags: ['autentikasi'],
+          summary: 'Status faktor kedua',
+          security: SECURED,
+          responses: {
+            '200': {
+              description: 'aktif atau tidak, dan sisa kode pemulihan',
+              content: json(envelope(ref('TotpStatus'))),
+            },
+            ...errors('session_expired'),
+          },
+        },
+      },
+
+      '/v1/auth/totp/setup': {
+        post: {
+          tags: ['autentikasi'],
+          summary: 'Memulai pendaftaran faktor kedua',
+          description:
+            'Membuat rahasia dan mengembalikan URI otpauth untuk dipindai. 2FA BELUM aktif ' +
+            'sampai `/enable` berhasil — memisahkan keduanya mencegah akun terkunci oleh ' +
+            'faktor kedua yang tidak pernah berhasil dipindai.',
+          security: SECURED,
+          responses: {
+            '200': { description: 'rahasia baru', content: json(envelope(ref('TotpSetup'))) },
+            ...errors('session_expired', 'conflict'),
+          },
+        },
+      },
+
+      '/v1/auth/totp/enable': {
+        post: {
+          tags: ['autentikasi'],
+          summary: 'Menyelesaikan pendaftaran faktor kedua',
+          description:
+            'Kode pemulihan dikembalikan SEKALI di sini dan tidak pernah dapat dibaca lagi; ' +
+            'yang tersimpan hanya hash-nya.',
+          security: SECURED,
+          requestBody: json({
+            type: 'object',
+            required: ['code'],
+            additionalProperties: false,
+            properties: { code: { type: 'string' } },
+          }),
+          responses: {
+            '200': {
+              description: 'kode pemulihan sekali pakai',
+              content: json(envelope(ref('RecoveryCodes'))),
+            },
+            ...errors('session_expired', 'invalid_credentials', 'not_found', 'conflict'),
+          },
+        },
+      },
+
+      '/v1/auth/totp/disable': {
+        post: {
+          tags: ['autentikasi'],
+          summary: 'Mematikan faktor kedua',
+          description:
+            'Menuntut kata sandi lagi: faktor kedua yang dapat dilepas tanpa faktor pertama ' +
+            'tidak menjaga apa pun. Rahasia dan seluruh kode pemulihan ikut dihapus.',
+          security: SECURED,
+          requestBody: json({
+            type: 'object',
+            required: ['password'],
+            additionalProperties: false,
+            properties: { password: { type: 'string' } },
+          }),
+          responses: {
+            '200': { description: '2FA dimatikan', content: json(envelope({ type: 'object' })) },
+            ...errors('session_expired', 'invalid_credentials'),
           },
         },
       },

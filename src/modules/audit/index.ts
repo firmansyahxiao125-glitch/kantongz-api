@@ -30,7 +30,13 @@ export type AuditEvent =
   | 'device_mismatch'
   | 'device_registered'
   | 'session_revoked'
-  | 'all_sessions_revoked';
+  | 'all_sessions_revoked'
+  /* Faktor kedua. `totp_failed` sengaja terpisah dari `sign_in_failed`:
+     kata sandi yang benar diikuti kode yang salah, berulang kali, adalah
+     bentuk serangan yang berbeda — dan yang paling pantas dilihat manusia. */
+  | 'totp_enabled'
+  | 'totp_disabled'
+  | 'totp_failed';
 
 export interface AuditEntry {
   event: AuditEvent;

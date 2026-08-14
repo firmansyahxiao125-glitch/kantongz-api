@@ -22,6 +22,13 @@
       "when": 1786247553006,
       "tag": "0002_warna_kategori_sistem",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786675537285,
+      "tag": "0003_totp_dan_kode_pemulihan",
+      "breakpoints": true
     }
   ]
 }

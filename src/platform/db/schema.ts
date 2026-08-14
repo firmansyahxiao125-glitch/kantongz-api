@@ -66,11 +66,56 @@ export const users = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
+
+    /*
+     * Rahasia TOTP, TERENKRIPSI seperti email dan nama.
+     *
+     * Ia setara kata sandi kedua: siapa pun yang membacanya dapat menerbitkan
+     * kode yang sah selamanya, tanpa jejak. Menyimpannya sebagai teks biasa
+     * berarti satu pembacaan basis data meniadakan seluruh faktor kedua.
+     *
+     * Nullable karena 2FA opsional — dan `totpEnabledAt` yang menentukan
+     * aktif atau tidak, bukan keberadaan rahasianya. Keduanya berbeda: rahasia
+     * sudah ada selama pendaftaran berlangsung, tetapi belum berlaku sampai
+     * pengguna membuktikan ia benar-benar dapat membaca kodenya.
+     */
+    totpSecretEncrypted: bytea('totp_secret_encrypted'),
+    totpEnabledAt: timestamp('totp_enabled_at', { withTimezone: true }),
   },
   (t) => [
     /* Unik hanya untuk akun hidup: pengguna yang memakai hak hapusnya harus
        bisa mendaftar lagi dengan alamat yang sama. §7 */
     uniqueIndex('users_email_active').on(t.emailHash).where(sql`${t.deletedAt} IS NULL`),
+  ],
+);
+
+/**
+ * Kode pemulihan 2FA — satu-satunya jalan masuk ketika ponselnya hilang.
+ *
+ * DISIMPAN SEBAGAI HASH, bukan teks. Alasannya sama persis dengan kata sandi:
+ * kode ini MENGGANTIKAN faktor kedua, jadi membacanya dari basis data cukup
+ * untuk melewatinya. Yang disimpan SHA-256 — bukan argon2id — karena kodenya
+ * dibangkitkan acak 10 karakter dari alfabet 31 huruf (~49 bit), bukan dipilih
+ * manusia; tidak ada kamus yang dapat menebaknya, dan yang dibutuhkan justru
+ * verifikasi yang murah.
+ *
+ * `usedAt` membuatnya SEKALI PAKAI. Kode pemulihan yang dapat dipakai berulang
+ * adalah kata sandi permanen yang tercetak di selembar kertas.
+ */
+export const recoveryCodes = pgTable(
+  'recovery_codes',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    codeHash: bytea('code_hash').notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    /* Pencarian selalu "kode milik pengguna ini yang belum terpakai". */
+    index('recovery_codes_user_unused').on(t.userId).where(sql`${t.usedAt} IS NULL`),
   ],
 );
 

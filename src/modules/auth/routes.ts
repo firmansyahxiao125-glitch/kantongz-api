@@ -27,7 +27,17 @@ const emailSchema = z.string().email().max(254);
 const passwordSchema = z.string().min(1).max(512);
 
 const schemas = {
-  signIn: z.object({ email: emailSchema, password: passwordSchema, device: deviceSchema }),
+  signIn: z.object({
+    email: emailSchema,
+    password: passwordSchema,
+    device: deviceSchema,
+    /* Longgar SENGAJA: kolom yang sama menerima kode TOTP enam digit MAUPUN
+       kode pemulihan bertanda hubung. Skema yang hanya menerima enam digit
+       akan menolak kode pemulihan sebelum service sempat memeriksanya. */
+    totpCode: z.string().trim().min(6).max(20).optional(),
+  }),
+  totpCode: z.object({ code: z.string().trim().min(6).max(20) }),
+  totpDisable: z.object({ password: passwordSchema }),
   register: z.object({
     fullName: z.string().min(1).max(120),
     email: emailSchema,
@@ -161,6 +171,43 @@ export function registerAuthRoutes(app: App, deps: RouteDeps): void {
     const claims = await callerClaims(request);
     const user = await service.currentUser(deps, claims.sub);
     void reply.send(success(user, request.requestId));
+  });
+
+  /* ── faktor kedua ──────────────────────────────────────────────────── */
+
+  app.get('/v1/auth/totp', async (request, reply) => {
+    const claims = await callerClaims(request);
+    void reply.send(success(await service.totpStatus(deps, claims.sub), request.requestId));
+  });
+
+  /* Memulai pendaftaran: rahasia lahir di sini, tetapi 2FA BELUM aktif. */
+  app.post('/v1/auth/totp/setup', async (request, reply) => {
+    const claims = await callerClaims(request);
+    void reply.send(success(await service.startTotpEnrolment(deps, claims.sub), request.requestId));
+  });
+
+  /* Menyelesaikan pendaftaran. Kode pemulihan dikembalikan SEKALI di sini dan
+     tidak pernah dapat dibaca lagi — yang tersimpan hanya hash-nya. */
+  app.post('/v1/auth/totp/enable', async (request, reply) => {
+    const claims = await callerClaims(request);
+    const body = parse(schemas.totpCode, request.body);
+    void reply.send(
+      success(
+        await service.confirmTotpEnrolment(deps, claims.sub, body.code, {
+          requestId: request.requestId,
+        }),
+        request.requestId,
+      ),
+    );
+  });
+
+  /* Mematikan 2FA menuntut KATA SANDI lagi: faktor kedua yang dapat dilepas
+     tanpa faktor pertama tidak menjaga apa pun. */
+  app.post('/v1/auth/totp/disable', async (request, reply) => {
+    const claims = await callerClaims(request);
+    const body = parse(schemas.totpDisable, request.body);
+    await service.disableTotp(deps, claims.sub, body.password, { requestId: request.requestId });
+    void reply.send(success({}, request.requestId));
   });
 
   /*
