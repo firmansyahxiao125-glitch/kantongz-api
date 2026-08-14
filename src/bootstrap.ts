@@ -6,6 +6,7 @@ import { createLogger, type Logger } from './platform/observability/logger.js';
 import type { RedisHandle } from './platform/redis/client.js';
 import { registerAuth, type DeliverCode } from './modules/auth/wiring.js';
 import { registerLedger } from './modules/ledger/wiring.js';
+import { registerAccount } from './modules/account/wiring.js';
 import { registerInsight } from './modules/insight/wiring.js';
 import { registerAssistant } from './modules/assistant/wiring.js';
 import { registerReceipt } from './modules/receipt/wiring.js';
@@ -104,6 +105,7 @@ export async function bootstrap(
   await registerAuth(app, { config, db: db.db, redis: redis.redis, logger }, deliverCode);
   await registerLedger(app, { config, db: db.db });
   await registerInsight(app, { config, db: db.db });
+  await registerAccount(app, { config, db: db.db });
   await registerAssistant(app, { config, db: db.db, logger });
   const receipt = await registerReceipt(app, { config, logger });
 

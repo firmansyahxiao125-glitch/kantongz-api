@@ -953,6 +953,47 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
         },
       },
 
+      '/v1/account/export': {
+        get: {
+          tags: ['autentikasi'],
+          summary: 'Mengunduh seluruh data pengguna',
+          description:
+            'Identitas, dompet, kategori buatan sendiri, SELURUH transaksi, anggaran, dan ' +
+            'tujuan. TIDAK memuat hash sandi, rahasia TOTP, kode pemulihan, hash perangkat, ' +
+            'maupun token — berkas ekspor lebih mudah bocor daripada basis data.',
+          security: SECURED,
+          responses: {
+            '200': {
+              description: 'berkas JSON, dikirim sebagai unduhan',
+              content: json(envelope({ type: 'object' })),
+            },
+            ...errors('session_expired'),
+          },
+        },
+      },
+
+      '/v1/account/close': {
+        post: {
+          tags: ['autentikasi'],
+          summary: 'Menutup akun',
+          description:
+            'Menandai akun terhapus, mencabut SELURUH sesi, dan memusnahkan bahan kunci 2FA. ' +
+            'Alamat email langsung bebas dipakai mendaftar lagi. Baris buku besar belum ' +
+            'dihapus dari disk — penghapusan permanen dijalankan operator.',
+          security: SECURED,
+          requestBody: json({
+            type: 'object',
+            required: ['password'],
+            additionalProperties: false,
+            properties: { password: { type: 'string' } },
+          }),
+          responses: {
+            '200': { description: 'akun ditutup', content: json(envelope({ type: 'object' })) },
+            ...errors('session_expired', 'invalid_credentials'),
+          },
+        },
+      },
+
       '/v1/auth/totp': {
         get: {
           tags: ['autentikasi'],

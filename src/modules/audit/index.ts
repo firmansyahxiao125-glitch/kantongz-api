@@ -36,7 +36,11 @@ export type AuditEvent =
      bentuk serangan yang berbeda — dan yang paling pantas dilihat manusia. */
   | 'totp_enabled'
   | 'totp_disabled'
-  | 'totp_failed';
+  | 'totp_failed'
+  /* Penutupan akun oleh pemiliknya. Dicatat `warning`, bukan `info`: ia tidak
+     dapat dibatalkan sendiri oleh pengguna, dan kalau ternyata bukan dia yang
+     melakukannya, baris inilah satu-satunya jejak kapan itu terjadi. */
+  | 'account_closed';
 
 export interface AuditEntry {
   event: AuditEvent;

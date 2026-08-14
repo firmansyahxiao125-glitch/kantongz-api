@@ -13,6 +13,7 @@ import { registerAuthRoutes } from '../routes.js';
 import { buildAuthDeps } from '../wiring.js';
 import { registerLedger } from '../../ledger/wiring.js';
 import { registerInsight } from '../../insight/wiring.js';
+import { registerAccount } from '../../account/wiring.js';
 import { registerAssistant } from '../../assistant/wiring.js';
 import { registerReceipt } from '../../receipt/wiring.js';
 import { seedSystemCategories } from '../../ledger/seed.js';
@@ -215,6 +216,7 @@ export async function createHarness(): Promise<Harness> {
      perlu diganti di sana, jadi tidak ada yang boleh diganti. */
   await registerLedger(app, { config, db });
   await registerInsight(app, { config, db });
+  await registerAccount(app, { config, db });
   await registerAssistant(app, { config, db, logger });
   const receipt = await registerReceipt(app, { config, logger });
   await seedSystemCategories(db);
