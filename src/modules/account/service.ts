@@ -3,6 +3,7 @@ import type { Database } from '../../platform/db/client.js';
 import { verifyPassword, type KeyProvider } from '../../platform/crypto/index.js';
 import { writeAudit } from '../audit/index.js';
 import * as authRepo from '../auth/repository.js';
+import * as recurring from '../ledger/recurring.js';
 import * as ledger from '../ledger/service.js';
 import * as repo from './repository.js';
 
@@ -46,11 +47,12 @@ export async function exportAccount(
   if (!akun) throw new AppError('session_expired');
 
   const led = { db: deps.db };
-  const [dompet, kategori, anggaran, tujuan] = await Promise.all([
+  const [dompet, kategori, anggaran, tujuan, berulang] = await Promise.all([
     ledger.listAccounts(led, userId),
     ledger.listCategories(led, userId),
     ledger.listBudgets(led, userId),
     ledger.listGoals(led, userId),
+    recurring.listRecurring(led, userId),
   ]);
 
   /*
@@ -89,6 +91,11 @@ export async function exportAccount(
     transactions: transaksi,
     budgets: anggaran,
     goals: tujuan,
+    /* Aturan berulang ikut, dan itu bukan kelengkapan belaka: ia satu-satunya
+       bagian pembukuan yang menulis SENDIRI setelah pengguna pergi. Berkas
+       ekspor yang menyembunyikannya membuat orang mengira sudah melihat
+       segalanya, padahal ada yang masih akan bergerak. */
+    recurring: berulang,
   };
 }
 

@@ -279,7 +279,14 @@ export interface TransactionInput {
  * sini menghasilkan pesan yang berguna, pemeriksaan di sana menjamin tidak ada
  * jalur tulis mana pun yang bisa melewatinya. Keduanya diperlukan.
  */
-async function resolveShape(
+/**
+ * Diekspor untuk aturan berulang (`recurring.ts`), yang menulis transaksi lewat
+ * jalur berbeda dan WAJIB tunduk pada validasi yang sama persis. Menyalin
+ * aturannya ke sana berarti dua salinan yang akan berbeda pada perubahan
+ * pertama — dan yang tertinggal adalah jalur yang berjalan tanpa ditonton
+ * siapa pun.
+ */
+export async function resolveShape(
   deps: LedgerDeps,
   userId: string,
   input: TransactionInput,

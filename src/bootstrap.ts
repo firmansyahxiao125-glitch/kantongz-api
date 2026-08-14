@@ -15,6 +15,10 @@ import { seedSystemCategories } from './modules/ledger/seed.js';
 import { createHttpMailer, type Mailer } from './modules/outbox/mailer.js';
 import { createSmtpMailer } from './modules/outbox/smtp.js';
 import { startWorker, type WorkerHandle } from './modules/outbox/worker.js';
+import {
+  startRecurringWorker,
+  type RecurringWorkerHandle,
+} from './modules/ledger/worker.js';
 
 /**
  * Perakitan dan siklus hidup proses.
@@ -31,6 +35,7 @@ export interface Runtime {
   app: App;
   logger: Logger;
   outbox: WorkerHandle;
+  recurring: RecurringWorkerHandle;
   /** Pekerja OCR memegang instans WASM; ia dilepas saat penutupan. */
   receipt: ReceiptReader;
 }
@@ -125,7 +130,15 @@ export async function bootstrap(
     batchSize: config.OUTBOX_BATCH_SIZE,
   });
 
-  return { app, logger, outbox, receipt };
+  /* Pekerja kedua, dan sengaja terpisah dari yang pertama: satu putaran email
+     yang lambat tidak boleh menunda pencatatan tagihan, dan sebaliknya. */
+  const recurring = startRecurringWorker({
+    db: db.db,
+    logger,
+    intervalMs: config.RECURRING_INTERVAL_MS,
+  });
+
+  return { app, logger, outbox, recurring, receipt };
 }
 
 /**
@@ -160,6 +173,7 @@ export async function serve(
          berjalan memegang transaksi, dan menutup pool di bawahnya membuat
          pesan yang sudah terkirim tidak pernah tertandai. */
       runtime.outbox.stop();
+      runtime.recurring.stop();
       await app.close();
       await runtime.receipt.close();
       await Promise.allSettled(closers.map((close) => close()));

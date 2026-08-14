@@ -6,6 +6,7 @@ import { success } from '../../http/envelope.js';
 import type { App } from '../../http/types.js';
 import { verifyAccessToken, type IssuerConfig } from '../tokens/jwt.js';
 import type { KeyRing } from '../tokens/keys.js';
+import * as recurring from './recurring.js';
 import * as service from './service.js';
 import type { LedgerDeps } from './service.js';
 
@@ -85,6 +86,21 @@ const schemas = {
     color: hexColor.optional(),
   }),
   contribute: z.object({ amount: amount }),
+  recurring: z.object({
+    name: z.string().trim().min(1).max(80),
+    accountId: id,
+    counterAccountId: id.optional(),
+    categoryId: id.optional(),
+    kind: z.enum(['income', 'expense', 'transfer']),
+    amount: amount.positive(),
+    merchant: z.string().trim().max(120).optional(),
+    note: z.string().trim().max(280).optional(),
+    cadence: z.enum(['daily', 'weekly', 'monthly']),
+    interval: z.number().int().min(1).max(366).default(1),
+    startsOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    endsOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  }),
+  pauseRecurring: z.object({ paused: z.boolean() }),
   cashflowQuery: z.object({
     days: z.coerce.number().int().min(1).max(365).optional(),
     months: z.coerce.number().int().min(1).max(60).optional(),
@@ -245,6 +261,63 @@ export function registerLedgerRoutes(app: App, deps: LedgerRouteDeps): void {
     const userId = await callerId(request);
     await service.deleteGoal(deps, userId, request.params.id);
     void reply.send(success({}, request.requestId));
+  });
+
+  /* ── aturan berulang ─────────────────────────────────────────────────── */
+
+  app.get('/v1/recurring', async (request, reply) => {
+    const userId = await callerId(request);
+    void reply.send(success(await recurring.listRecurring(deps, userId), request.requestId));
+  });
+
+  app.post('/v1/recurring', async (request, reply) => {
+    const userId = await callerId(request);
+    const body = parse(schemas.recurring, request.body);
+    void reply
+      .status(201)
+      .send(success(await recurring.createRecurring(deps, userId, body), request.requestId));
+  });
+
+  app.put<{ Params: { id: string } }>('/v1/recurring/:id', async (request, reply) => {
+    const userId = await callerId(request);
+    const body = parse(schemas.recurring, request.body);
+    void reply.send(
+      success(
+        await recurring.updateRecurring(deps, userId, request.params.id, body),
+        request.requestId,
+      ),
+    );
+  });
+
+  app.post<{ Params: { id: string } }>('/v1/recurring/:id/pause', async (request, reply) => {
+    const userId = await callerId(request);
+    const body = parse(schemas.pauseRecurring, request.body);
+    void reply.send(
+      success(
+        await recurring.setRecurringPaused(deps, userId, request.params.id, body.paused),
+        request.requestId,
+      ),
+    );
+  });
+
+  app.delete<{ Params: { id: string } }>('/v1/recurring/:id', async (request, reply) => {
+    const userId = await callerId(request);
+    await recurring.deleteRecurring(deps, userId, request.params.id);
+    void reply.send(success({}, request.requestId));
+  });
+
+  /*
+   * Menjalankan yang jatuh tempo SEKARANG, tanpa menunggu putaran pekerja.
+   *
+   * Bukan rute administratif meski bekerja lintas pengguna: ia HANYA
+   * menjalankan aturan yang memang sudah jatuh tempo, dan itu persis yang
+   * dikerjakan pekerja tiap menit. Memanggilnya seribu kali menghasilkan
+   * keadaan yang sama dengan memanggilnya sekali; yang memanggil tetap wajib
+   * membawa sesi yang sah.
+   */
+  app.post('/v1/recurring/run', async (request, reply) => {
+    await callerId(request);
+    void reply.send(success(await recurring.runDueRecurring(deps), request.requestId));
   });
 
   /* ── analitik ──────────────────────────────────────────────────────── */

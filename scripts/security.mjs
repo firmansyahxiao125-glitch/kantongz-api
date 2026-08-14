@@ -245,5 +245,63 @@ ok(
   !/wallet_accounts|insert into|drizzle|postgres/i.test(JSON.stringify(r.b)),
 );
 
+/* ── aturan berulang: kepemilikan dan penulisan ganda ─────────────────── */
+
+console.log('\n--- Aturan berulang ---');
+
+const hariIni = new Date(Date.now() + 7 * 3_600_000).toISOString().slice(0, 10);
+const penanda = `sec-berulang-${String(Date.now())}`;
+
+const aturanA = await post('/v1/recurring', tokA, {
+  name: 'Langganan A', accountId: akun.b.data.id, categoryId: kategori.id,
+  kind: 'expense', amount: 33_000, cadence: 'daily', interval: 1,
+  startsOn: hariIni, merchant: penanda,
+});
+ok('A dapat membuat aturan berulang', aturanA.s === 201, `(${String(aturanA.s)})`);
+
+r = await J(await fetch(`${BASE}/v1/recurring`, { headers: H(tokB) }));
+ok('B tidak melihat aturan A', !JSON.stringify(r.b).includes(aturanA.b.data?.id ?? ' '));
+
+r = await J(await fetch(`${BASE}/v1/recurring/${aturanA.b.data.id}`, {
+  method: 'DELETE', headers: { Authorization: `Bearer ${tokB}` },
+}));
+ok('B tidak bisa menghapus aturan A', ditolak(r.s), `(${String(r.s)})`);
+
+r = await post('/v1/recurring', tokB, {
+  name: 'Nyelinap', accountId: akun.b.data.id, kind: 'expense',
+  amount: 1_000, cadence: 'daily', interval: 1, startsOn: hariIni,
+});
+ok('B tidak bisa menjadwalkan ke dompet A', ditolak(r.s), `(${String(r.s)})`);
+
+/*
+ * TIGA PUTARAN SERENTAK, TERHADAP POSTGRESQL SUNGGUHAN.
+ *
+ * Inilah yang tidak dapat dibuktikan uji unit: harness memakai PGlite dengan
+ * satu koneksi, jadi `Promise.all` di sana hanya menyerialkan pernyataannya.
+ * Di sini ketiganya benar-benar berebut baris yang sama lewat tiga koneksi
+ * HTTP, dan yang menjaganya adalah `FOR UPDATE SKIP LOCKED` ditambah indeks
+ * unik `(rule_id, occurred_on)`.
+ *
+ * Tagihan yang tercatat dua kali baru ketahuan saat saldo tidak lagi cocok,
+ * berbulan-bulan kemudian, dan saat itu tidak ada yang tahu harus mencari
+ * di mana.
+ */
+await Promise.all([
+  post('/v1/recurring/run', tokA, {}),
+  post('/v1/recurring/run', tokA, {}),
+  post('/v1/recurring/run', tokA, {}),
+]);
+
+const daftar = await (
+  await fetch(`${BASE}/v1/transactions?limit=100`, { headers: H(tokA) })
+).json();
+const lahir = (daftar.data?.items ?? []).filter((t) => t.merchant === penanda);
+ok('tiga putaran serentak menulis TEPAT SATU', lahir.length === 1, `(${String(lahir.length)})`);
+
+const sesudah = await (await fetch(`${BASE}/v1/recurring`, { headers: H(tokA) })).json();
+const punyaA = (sesudah.data ?? []).find((x) => x.id === aturanA.b.data.id);
+ok('tanggal jalan maju sesudah dicatat', (punyaA?.nextRunOn ?? '') > hariIni, `(${String(punyaA?.nextRunOn)})`);
+ok('jumlah yang dilahirkan dihitung benar', punyaA?.postedCount === 1, `(${String(punyaA?.postedCount)})`);
+
 console.log(`\n  KEAMANAN: ${String(lulus)} lulus, ${String(gagal)} gagal`);
 process.exit(gagal > 0 ? 1 : 0);

@@ -106,6 +106,16 @@ const schema = z.object({
   OUTBOX_BATCH_SIZE: z.coerce.number().int().min(1).max(200).default(20),
 
   /**
+   * Jeda antar putaran pekerja aturan berulang.
+   *
+   * Satu menit, bukan dua detik seperti outbox. Yang ditunggu di sini adalah
+   * pergantian TANGGAL, jadi memeriksanya tiga puluh kali per menit hanya
+   * menambah kueri tanpa menambah ketepatan. Batas bawahnya tetap rendah
+   * supaya uji dapat memutarnya cepat.
+   */
+  RECURRING_INTERVAL_MS: z.coerce.number().int().min(200).max(3_600_000).default(60_000),
+
+  /**
    * Model LOKAL lewat Ollama. Penyedia BAWAAN untuk M11 dan M13.
    *
    * Tanpa akun, tanpa biaya berulang, dan tanpa satu pun byte data keuangan

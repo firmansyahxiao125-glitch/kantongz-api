@@ -5,11 +5,14 @@ import {
   budgets,
   categories,
   goals,
+  recurringRules,
+  recurringRuns,
   transactions,
   walletAccounts,
   type BudgetRow,
   type CategoryRow,
   type GoalRow,
+  type RecurringRuleRow,
   type TransactionRow,
   type WalletAccountRow,
 } from '../../platform/db/ledger.js';
@@ -685,4 +688,140 @@ export async function deleteGoal(db: Database, userId: string, id: string): Prom
     .where(and(eq(goals.userId, userId), eq(goals.id, id)))
     .returning({ id: goals.id });
   return rows.length > 0;
+}
+
+/* ── aturan berulang ─────────────────────────────────────────────────── */
+
+export async function listRules(db: Database, userId: string): Promise<RecurringRuleRow[]> {
+  return db
+    .select()
+    .from(recurringRules)
+    .where(eq(recurringRules.userId, userId))
+    .orderBy(asc(recurringRules.nextRunOn), asc(recurringRules.createdAt));
+}
+
+export async function findRule(
+  db: Database,
+  userId: string,
+  id: string,
+): Promise<RecurringRuleRow | null> {
+  const rows = await db
+    .select()
+    .from(recurringRules)
+    .where(and(eq(recurringRules.userId, userId), eq(recurringRules.id, id)))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function insertRule(
+  db: Database,
+  userId: string,
+  input: Omit<RecurringRuleRow, 'id' | 'userId' | 'createdAt' | 'updatedAt'>,
+): Promise<RecurringRuleRow> {
+  const rows = await db
+    .insert(recurringRules)
+    .values({ id: newId('rec'), userId, ...input })
+    .returning();
+
+  const row = rows[0];
+  if (!row) throw new Error('insert aturan berulang tidak mengembalikan baris');
+  return row;
+}
+
+export async function updateRule(
+  db: Database,
+  userId: string,
+  id: string,
+  patch: Partial<Omit<RecurringRuleRow, 'id' | 'userId' | 'createdAt'>>,
+): Promise<RecurringRuleRow | null> {
+  const rows = await db
+    .update(recurringRules)
+    .set({ ...patch, updatedAt: new Date() })
+    .where(and(eq(recurringRules.userId, userId), eq(recurringRules.id, id)))
+    .returning();
+  return rows[0] ?? null;
+}
+
+export async function deleteRule(db: Database, userId: string, id: string): Promise<boolean> {
+  const rows = await db
+    .delete(recurringRules)
+    .where(and(eq(recurringRules.userId, userId), eq(recurringRules.id, id)))
+    .returning({ id: recurringRules.id });
+  return rows.length > 0;
+}
+
+/**
+ * Id aturan yang sudah jatuh tempo. TANPA kunci, dan itu disengaja.
+ *
+ * Penguncian terjadi satu per satu di `lockRule`, di dalam transaksi masing-
+ * masing. Mengunci seluruh angkatan dalam satu transaksi berarti satu aturan
+ * yang gagal — dompetnya lenyap, mata uangnya berubah — membatalkan penulisan
+ * aturan milik pengguna lain yang sama sekali tidak berhubungan.
+ */
+export async function dueRuleIds(db: Database, today: string, limit: number): Promise<string[]> {
+  const rows = await db
+    .select({ id: recurringRules.id })
+    .from(recurringRules)
+    .where(and(isNull(recurringRules.pausedAt), lte(recurringRules.nextRunOn, today)))
+    .orderBy(asc(recurringRules.nextRunOn))
+    .limit(limit);
+  return rows.map((r) => r.id);
+}
+
+/**
+ * Mengunci satu aturan untuk diproses.
+ *
+ * `SKIP LOCKED`: instans API kedua yang menjalankan putaran yang sama akan
+ * melewati aturan ini alih-alih menunggu, dan karena itu dua instans tidak
+ * pernah menulis kejadian yang sama. Jatuh temponya DIPERIKSA ULANG di sini —
+ * antara pemilihan id dan penguncian, putaran lain mungkin sudah menuntaskannya.
+ */
+export async function lockRule(
+  db: Database,
+  id: string,
+  today: string,
+): Promise<RecurringRuleRow | null> {
+  const rows = await db
+    .select()
+    .from(recurringRules)
+    .where(
+      and(
+        eq(recurringRules.id, id),
+        isNull(recurringRules.pausedAt),
+        lte(recurringRules.nextRunOn, today),
+      ),
+    )
+    .limit(1)
+    .for('update', { skipLocked: true });
+  return rows[0] ?? null;
+}
+
+/**
+ * Mencatat bahwa satu kejadian sudah menjadi transaksi.
+ *
+ * Mengembalikan `false` bila tanggal itu sudah pernah tercatat. Pemanggilnya
+ * WAJIB menggagalkan transaksi basis datanya saat itu terjadi: transaksi uang
+ * sudah terlanjur ditulis pada baris sebelumnya, dan membiarkannya berarti satu
+ * tagihan tercatat dua kali tanpa jejak yang menghubungkannya ke aturan.
+ */
+export async function insertRun(
+  db: Database,
+  ruleId: string,
+  occurredOn: string,
+  transactionId: string,
+): Promise<boolean> {
+  const rows = await db
+    .insert(recurringRuns)
+    .values({ id: newId('run'), ruleId, occurredOn, transactionId })
+    .onConflictDoNothing({ target: [recurringRuns.ruleId, recurringRuns.occurredOn] })
+    .returning({ id: recurringRuns.id });
+  return rows.length > 0;
+}
+
+export async function countRuns(db: Database, ruleId: string): Promise<number> {
+  const rows = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(recurringRuns)
+    .where(eq(recurringRuns.ruleId, ruleId));
+  return rows[0]?.n ?? 0;
 }

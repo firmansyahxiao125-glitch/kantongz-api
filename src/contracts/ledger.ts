@@ -78,6 +78,37 @@ export interface Goal {
   achieved: boolean;
 }
 
+export type Cadence = 'daily' | 'weekly' | 'monthly';
+
+/**
+ * Aturan berulang: tagihan atau pemasukan yang jatuh pada irama tetap.
+ *
+ * `nextRunOn` adalah tanggal KALENDER (`YYYY-MM-DD`), bukan cap waktu, karena
+ * "tanggal 1 setiap bulan" adalah pernyataan tentang kalender. Perubahannya
+ * menjadi titik waktu terjadi sekali, saat transaksinya ditulis.
+ */
+export interface RecurringRule {
+  id: string;
+  name: string;
+  accountId: string;
+  counterAccountId: string | null;
+  categoryId: string | null;
+  kind: TransactionKind;
+  amount: number;
+  currency: string;
+  merchant: string | null;
+  note: string | null;
+  cadence: Cadence;
+  interval: number;
+  startsOn: string;
+  endsOn: string | null;
+  nextRunOn: string;
+  lastRunOn: string | null;
+  paused: boolean;
+  /** Berapa transaksi yang sudah dilahirkan aturan ini. */
+  postedCount: number;
+}
+
 export interface CashflowPoint {
   /** `YYYY-MM-DD` untuk harian, `YYYY-MM` untuk bulanan. */
   bucket: string;

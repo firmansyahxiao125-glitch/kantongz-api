@@ -114,6 +114,24 @@ export function periodStart(
   return { from, to };
 }
 
+/**
+ * Tengah hari lokal pada sebuah tanggal kalender, sebagai titik waktu UTC.
+ *
+ * TENGAH HARI, bukan tengah malam. Transaksi tanggal 1 yang disimpan sebagai
+ * 00:00 lokal jatuh ke bulan sebelumnya begitu ada pergeseran zona sebesar apa
+ * pun — dan pergeseran itu pasti ada, karena laporan dibaca dari zona lain
+ * dan basis data menyimpan UTC. Pukul dua belas adalah satu-satunya jam yang
+ * bertahan terhadap pergeseran ke dua arah, termasuk peralihan waktu musim
+ * panas di negara yang menerapkannya.
+ *
+ * Ini satu-satunya tempat aturan berulang menyeberang dari kalender ke waktu.
+ */
+export function localNoon(on: string, timeZone: string = DEFAULT_TIMEZONE): Date {
+  const [year, month, day] = on.split('-').map(Number) as [number, number, number];
+  const guess = new Date(Date.UTC(year, month - 1, day, 12));
+  return new Date(guess.getTime() - offsetMs(timeZone, guess));
+}
+
 export function toDateString(at: Date, timeZone: string = DEFAULT_TIMEZONE): string {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone,

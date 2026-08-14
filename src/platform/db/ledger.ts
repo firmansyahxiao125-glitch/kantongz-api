@@ -221,6 +221,100 @@ export const goals = pgTable(
   ],
 );
 
+/**
+ * Aturan berulang: tagihan dan pemasukan yang jatuh pada irama tetap.
+ *
+ * Yang disimpan adalah ATURANNYA, bukan kejadiannya. Menuliskan dua belas
+ * baris transaksi di muka untuk cicilan setahun berarti dua belas baris yang
+ * harus diperbaiki serentak ketika nominalnya berubah — dan yang di masa depan
+ * akan ikut terhitung di saldo hari ini.
+ */
+export const recurringCadence = pgEnum('recurring_cadence', ['daily', 'weekly', 'monthly']);
+
+export const recurringRules = pgTable(
+  'recurring_rules',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => walletAccounts.id, { onDelete: 'cascade' }),
+    counterAccountId: text('counter_account_id').references(() => walletAccounts.id, {
+      onDelete: 'cascade',
+    }),
+    categoryId: text('category_id').references(() => categories.id, { onDelete: 'set null' }),
+    kind: transactionKind('kind').notNull(),
+    amount: bigint('amount', { mode: 'number' }).notNull(),
+    currency: text('currency').notNull().default('IDR'),
+    merchant: text('merchant'),
+    note: text('note'),
+    cadence: recurringCadence('cadence').notNull(),
+    /** Berapa satuan sekali. 1 = tiap hari/pekan/bulan. */
+    interval: integer('interval').notNull().default(1),
+    /**
+     * Hari jangkar untuk irama bulanan, 1–31.
+     *
+     * TERPISAH dari `next_run_on`, dan itu bukan penyimpanan berlebih.
+     * Tagihan tanggal 31 dijepit ke 28 di bulan Februari; kalau hasil jepitan
+     * itu menjadi dasar bulan berikutnya, jatuh temponya bergeser maju
+     * selamanya. Lihat `modules/ledger/schedule.ts`.
+     */
+    anchorDay: integer('anchor_day').notNull(),
+    startsOn: date('starts_on').notNull(),
+    endsOn: date('ends_on'),
+    /** Tanggal kejadian berikutnya yang BELUM dicatat. */
+    nextRunOn: date('next_run_on').notNull(),
+    lastRunOn: date('last_run_on'),
+    pausedAt: timestamp('paused_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    /* Kueri pekerja: aturan mana pun, milik siapa pun, yang sudah jatuh tempo.
+       Yang dijeda tidak masuk indeks sama sekali — aturan yang dimatikan tidak
+       boleh membebani putaran yang berjalan tiap menit. */
+    index('recurring_rules_due').on(t.nextRunOn).where(sql`${t.pausedAt} IS NULL`),
+    index('recurring_rules_user').on(t.userId),
+    check('recurring_rules_amount_positive', sql`${t.amount} > 0`),
+    check('recurring_rules_interval_positive', sql`${t.interval} >= 1`),
+    check('recurring_rules_anchor_range', sql`${t.anchorDay} BETWEEN 1 AND 31`),
+    check(
+      'recurring_rules_transfer_shape',
+      sql`(${t.kind} = 'transfer' AND ${t.counterAccountId} IS NOT NULL AND ${t.counterAccountId} <> ${t.accountId})
+          OR (${t.kind} <> 'transfer' AND ${t.counterAccountId} IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * Kejadian yang SUDAH dicatat, satu baris per tanggal.
+ *
+ * Alasannya tunggal dan tidak dapat digantikan pemeriksaan di lapisan
+ * layanan: indeks unik `(rule_id, occurred_on)`. Pekerja yang mati di tengah
+ * putaran, dua instans API yang berjalan bersamaan, atau satu putaran yang
+ * diulang setelah gangguan jaringan — ketiganya menghasilkan penulisan ganda
+ * yang hanya dapat ditolak basis data. Tagihan sewa yang tercatat dua kali
+ * adalah kesalahan yang baru ketahuan saat saldo tidak lagi cocok.
+ */
+export const recurringRuns = pgTable(
+  'recurring_runs',
+  {
+    id: text('id').primaryKey(),
+    ruleId: text('rule_id')
+      .notNull()
+      .references(() => recurringRules.id, { onDelete: 'cascade' }),
+    occurredOn: date('occurred_on').notNull(),
+    transactionId: text('transaction_id')
+      .notNull()
+      .references(() => transactions.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('recurring_runs_once').on(t.ruleId, t.occurredOn)],
+);
+
 export const walletAccountsRelations = relations(walletAccounts, ({ one, many }) => ({
   user: one(users, { fields: [walletAccounts.userId], references: [users.id] }),
   transactions: many(transactions),
@@ -239,3 +333,5 @@ export type CategoryRow = typeof categories.$inferSelect;
 export type TransactionRow = typeof transactions.$inferSelect;
 export type BudgetRow = typeof budgets.$inferSelect;
 export type GoalRow = typeof goals.$inferSelect;
+export type RecurringRuleRow = typeof recurringRules.$inferSelect;
+export type RecurringRunRow = typeof recurringRuns.$inferSelect;

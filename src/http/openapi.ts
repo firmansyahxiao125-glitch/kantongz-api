@@ -378,6 +378,84 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
           },
         },
 
+        RecurringInput: {
+          type: 'object',
+          required: ['name', 'accountId', 'kind', 'amount', 'cadence', 'startsOn'],
+          additionalProperties: false,
+          properties: {
+            name: { type: 'string', minLength: 1, maxLength: 80 },
+            accountId: { type: 'string' },
+            counterAccountId: { type: 'string', description: 'Hanya untuk transfer.' },
+            categoryId: { type: 'string' },
+            kind: { type: 'string', enum: ['income', 'expense', 'transfer'] },
+            amount: { type: 'integer', minimum: 1 },
+            merchant: { type: 'string', maxLength: 120 },
+            note: { type: 'string', maxLength: 280 },
+            cadence: { type: 'string', enum: ['daily', 'weekly', 'monthly'] },
+            interval: { type: 'integer', minimum: 1, maximum: 366, default: 1 },
+            startsOn: {
+              type: 'string',
+              format: 'date',
+              description:
+                'Boleh mundur, tapi tidak lebih dari 31 hari. Tanggal mulai tahun lalu akan melahirkan ratusan transaksi yang tidak pernah diminta siapa pun.',
+            },
+            endsOn: { type: 'string', format: 'date' },
+          },
+        },
+
+        RecurringRule: {
+          type: 'object',
+          required: [
+            'id',
+            'name',
+            'accountId',
+            'counterAccountId',
+            'categoryId',
+            'kind',
+            'amount',
+            'currency',
+            'merchant',
+            'note',
+            'cadence',
+            'interval',
+            'startsOn',
+            'endsOn',
+            'nextRunOn',
+            'lastRunOn',
+            'paused',
+            'postedCount',
+          ],
+          additionalProperties: false,
+          properties: {
+            id: { type: 'string' },
+            name: { type: 'string', maxLength: 80 },
+            accountId: { type: 'string' },
+            counterAccountId: { type: ['string', 'null'] },
+            categoryId: { type: ['string', 'null'] },
+            kind: { type: 'string', enum: ['income', 'expense', 'transfer'] },
+            amount: { type: 'integer', minimum: 1 },
+            currency: { type: 'string' },
+            merchant: { type: ['string', 'null'] },
+            note: { type: ['string', 'null'] },
+            cadence: { type: 'string', enum: ['daily', 'weekly', 'monthly'] },
+            interval: { type: 'integer', minimum: 1 },
+            startsOn: { type: 'string', format: 'date' },
+            endsOn: { type: ['string', 'null'], format: 'date' },
+            nextRunOn: {
+              type: 'string',
+              format: 'date',
+              description: 'Tanggal kejadian berikutnya yang BELUM dicatat.',
+            },
+            lastRunOn: { type: ['string', 'null'], format: 'date' },
+            paused: { type: 'boolean' },
+            postedCount: {
+              type: 'integer',
+              minimum: 0,
+              description: 'Berapa transaksi yang sudah dilahirkan aturan ini.',
+            },
+          },
+        },
+
         Goal: {
           type: 'object',
           required: [
@@ -1398,6 +1476,111 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
           responses: {
             '201': { description: 'tujuan', content: json(envelope(ref('Goal'))) },
             ...errors('invalid_input', 'conflict', 'session_expired'),
+          },
+        },
+      },
+
+      '/v1/recurring': {
+        get: {
+          tags: ['rencana'],
+          summary: 'Aturan berulang',
+          security: SECURED,
+          responses: {
+            '200': {
+              description: 'aturan',
+              content: json(envelope({ type: 'array', items: ref('RecurringRule') })),
+            },
+            ...errors('session_expired'),
+          },
+        },
+        post: {
+          tags: ['rencana'],
+          summary: 'Membuat aturan berulang',
+          description:
+            'Yang disimpan adalah ATURANNYA, bukan transaksinya. Transaksi lahir saat tanggalnya tiba — bukan dua belas baris bertanggal masa depan yang ikut terhitung di saldo hari ini.',
+          security: SECURED,
+          requestBody: { required: true, content: json(ref('RecurringInput')) },
+          responses: {
+            '201': { description: 'aturan', content: json(envelope(ref('RecurringRule'))) },
+            ...errors('not_found', 'invalid_input', 'session_expired'),
+          },
+        },
+      },
+
+      '/v1/recurring/{id}': {
+        put: {
+          tags: ['rencana'],
+          summary: 'Mengubah aturan berulang',
+          description:
+            'Tanggal jalan berikutnya TIDAK dimundurkan. Mengembalikannya ke tanggal mulai akan mencatat ulang bulan yang sudah dibayar dengan tanggal yang berbeda — dan indeks unik tidak menolak yang tanggalnya berbeda.',
+          security: SECURED,
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: { required: true, content: json(ref('RecurringInput')) },
+          responses: {
+            '200': { description: 'aturan', content: json(envelope(ref('RecurringRule'))) },
+            ...errors('not_found', 'invalid_input', 'session_expired'),
+          },
+        },
+        delete: {
+          tags: ['rencana'],
+          summary: 'Menghapus aturan berulang',
+          description:
+            'Transaksi yang SUDAH lahir darinya tetap tinggal. Menghapus uang yang sudah keluar akan mengubah saldo bulan yang sudah ditutup.',
+          security: SECURED,
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            '200': { description: 'dihapus', content: json(envelope(ref('Empty'))) },
+            ...errors('not_found', 'session_expired'),
+          },
+        },
+      },
+
+      '/v1/recurring/{id}/pause': {
+        post: {
+          tags: ['rencana'],
+          summary: 'Menjeda atau melanjutkan',
+          description:
+            'Melanjutkan MELOMPATI yang terlewat: tanggal jalan dimajukan ke kejadian pertama yang belum lewat. Orang menjeda justru supaya tagihannya tidak terjadi.',
+          security: SECURED,
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            required: true,
+            content: json({
+              type: 'object',
+              required: ['paused'],
+              additionalProperties: false,
+              properties: { paused: { type: 'boolean' } },
+            }),
+          },
+          responses: {
+            '200': { description: 'aturan', content: json(envelope(ref('RecurringRule'))) },
+            ...errors('not_found', 'session_expired'),
+          },
+        },
+      },
+
+      '/v1/recurring/run': {
+        post: {
+          tags: ['rencana'],
+          summary: 'Menjalankan yang jatuh tempo sekarang',
+          description:
+            'Sama dengan yang dikerjakan pekerja latar tiap menit. Idempoten: memanggilnya seribu kali menghasilkan keadaan yang sama dengan memanggilnya sekali.',
+          security: SECURED,
+          responses: {
+            '200': {
+              description: 'ringkasan putaran',
+              content: json(
+                envelope({
+                  type: 'object',
+                  required: ['posted', 'failed'],
+                  properties: {
+                    posted: { type: 'integer', description: 'Berapa transaksi yang lahir.' },
+                    failed: { type: 'integer', description: 'Berapa aturan yang gagal seluruhnya.' },
+                  },
+                }),
+              ),
+            },
+            ...errors('session_expired'),
           },
         },
       },
