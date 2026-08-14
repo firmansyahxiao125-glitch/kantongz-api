@@ -566,6 +566,7 @@ export async function insertBudget(
     amount: number;
     currency: string;
     startsOn: string;
+    rollover: boolean;
   },
 ): Promise<BudgetRow> {
   const rows = await db
@@ -576,6 +577,22 @@ export async function insertBudget(
   const row = rows[0];
   if (!row) throw new Error('insert anggaran tidak mengembalikan baris');
   return row;
+}
+
+export async function updateBudget(
+  db: Database,
+  userId: string,
+  id: string,
+  patch: Partial<{ rollover: boolean }>,
+): Promise<BudgetRow | null> {
+  const rows = await db
+    .update(budgets)
+    .set(patch)
+    /* Hanya anggaran yang MASIH BERJALAN. Yang sudah ditutup mewakili periode
+       yang sudah lewat, dan mengubahnya berarti mengubah sejarah. */
+    .where(and(eq(budgets.userId, userId), eq(budgets.id, id), isNull(budgets.endsOn)))
+    .returning();
+  return rows[0] ?? null;
 }
 
 /** Menutup anggaran berjalan alih-alih menimpanya — bulan yang sudah lewat
@@ -688,6 +705,55 @@ export async function deleteGoal(db: Database, userId: string, id: string): Prom
     .where(and(eq(goals.userId, userId), eq(goals.id, id)))
     .returning({ id: goals.id });
   return rows.length > 0;
+}
+
+/**
+ * Pengeluaran per kategori PER HARI LOKAL.
+ *
+ * Satu kueri untuk seluruh rentang penelusuran sisa anggaran, lalu
+ * dikelompokkan menjadi periode di TypeScript. Alternatifnya — satu kueri per
+ * periode per anggaran — berarti seratus kueri untuk memuat satu dasbor.
+ *
+ * Harinya dihitung DI BASIS DATA dalam zona pengguna, karena membelah menurut
+ * hari UTC menggeser setiap transaksi sebelum pukul tujuh pagi ke hari
+ * sebelumnya di Jakarta.
+ */
+export async function spentPerCategoryPerDay(
+  db: Database,
+  userId: string,
+  from: Date,
+  to: Date,
+  timeZone: string,
+): Promise<{ categoryId: string; day: string; total: number }[]> {
+  const rows = await db
+    .select({
+      categoryId: transactions.categoryId,
+      day: sql<string>`to_char(${transactions.occurredAt} AT TIME ZONE ${timeZone}, 'YYYY-MM-DD')`,
+      total: sql<string>`SUM(${transactions.amount})`,
+    })
+    .from(transactions)
+    .where(
+      and(
+        eq(transactions.userId, userId),
+        isNull(transactions.deletedAt),
+        eq(transactions.kind, 'expense'),
+        gte(transactions.occurredAt, from),
+        lte(transactions.occurredAt, to),
+      ),
+    )
+    /*
+     * `GROUP BY 1, 2` — posisi kolom keluaran, bukan ekspresinya ditulis ulang.
+     *
+     * Menulis ulang `to_char(... AT TIME ZONE $1 ...)` di sini membuat zona
+     * waktunya terikat sebagai parameter KEDUA ($6), dan PostgreSQL menganggap
+     * `$1` dan `$6` dua ekspresi berbeda — lalu menolak seluruh kuerinya
+     * dengan "column must appear in the GROUP BY clause".
+     */
+    .groupBy(sql`1, 2`);
+
+  return rows
+    .filter((r) => r.categoryId !== null)
+    .map((r) => ({ categoryId: r.categoryId as string, day: r.day, total: Number(r.total) }));
 }
 
 /**

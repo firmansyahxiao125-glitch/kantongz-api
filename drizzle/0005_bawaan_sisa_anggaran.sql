@@ -1,0 +1,1 @@
+ALTER TABLE "budgets" ADD COLUMN "rollover" boolean DEFAULT false NOT NULL;

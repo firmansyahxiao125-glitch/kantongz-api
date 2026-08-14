@@ -365,7 +365,18 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
 
         Budget: {
           type: 'object',
-          required: ['id', 'categoryId', 'period', 'amount', 'currency', 'startsOn', 'spent'],
+          required: [
+            'id',
+            'categoryId',
+            'period',
+            'amount',
+            'currency',
+            'startsOn',
+            'spent',
+            'rollover',
+            'carryOver',
+            'limit',
+          ],
           additionalProperties: false,
           properties: {
             id: { type: 'string' },
@@ -375,6 +386,17 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
             currency: { type: 'string' },
             startsOn: { type: 'string', format: 'date' },
             spent: { type: 'integer', description: 'Dihitung dari transaksi periode berjalan.' },
+            rollover: { type: 'boolean', description: 'Sisa periode lalu ikut ke periode ini.' },
+            carryOver: {
+              type: 'integer',
+              description:
+                'Bawaan dari periode sebelumnya. Positif = sisa, NEGATIF = utang dari periode yang jebol. Selalu 0 ketika rollover mati. Ditelusuri paling jauh 12 periode, dan tidak pernah melewati periode sebelum anggarannya berdiri.',
+            },
+            limit: {
+              type: 'integer',
+              minimum: 0,
+              description: 'amount + carryOver, tidak pernah di bawah nol. Ini yang diukur `spent`.',
+            },
           },
         },
 
@@ -1457,6 +1479,27 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
       },
 
       '/v1/budgets/{id}': {
+        patch: {
+          tags: ['rencana'],
+          summary: 'Menyalakan atau mematikan bawaan sisa',
+          description:
+            'Bawaannya dihitung dari transaksi, tidak disimpan — jadi menyalakannya hari ini langsung memperlihatkan sisa periode yang sudah lewat, dan mematikannya mengembalikan batas ke jatah polos tanpa kehilangan apa pun. Hanya anggaran yang MASIH berjalan yang dapat diubah.',
+          security: SECURED,
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            required: true,
+            content: json({
+              type: 'object',
+              required: ['rollover'],
+              additionalProperties: false,
+              properties: { rollover: { type: 'boolean' } },
+            }),
+          },
+          responses: {
+            '200': { description: 'anggaran', content: json(envelope(ref('Budget'))) },
+            ...errors('not_found', 'invalid_input', 'session_expired'),
+          },
+        },
         delete: {
           tags: ['rencana'],
           summary: 'Menghentikan anggaran',

@@ -21,6 +21,7 @@ import type {
 import { DEFAULT_CURRENCY, assertAmount, isSupportedCurrency } from './money.js';
 import { daysBack, monthRange, periodStart, previousMonthRange, toDateString } from './periods.js';
 import * as repo from './repository.js';
+import { carryOverFor, limitOf } from './rollover.js';
 
 /**
  * Aturan buku besar.
@@ -83,7 +84,7 @@ function toTransaction(row: TransactionRow): Transaction {
   };
 }
 
-function toBudget(row: BudgetRow, spent: number): Budget {
+function toBudget(row: BudgetRow, spent: number, carryOver = 0): Budget {
   return {
     id: row.id,
     categoryId: row.categoryId,
@@ -92,6 +93,9 @@ function toBudget(row: BudgetRow, spent: number): Budget {
     currency: row.currency,
     startsOn: row.startsOn,
     spent,
+    rollover: row.rollover,
+    carryOver: row.rollover ? carryOver : 0,
+    limit: row.rollover ? limitOf(row.amount, carryOver) : row.amount,
   };
 }
 
@@ -416,9 +420,36 @@ export async function listBudgets(
     perPeriod.set(row.period, await repo.spentPerCategory(deps.db, userId, range.from, range.to));
   }
 
+  const carry = await carryOverFor(deps, userId, rows, now);
+
   return rows.map((row) =>
-    toBudget(row, perPeriod.get(row.period)?.get(row.categoryId) ?? 0),
+    toBudget(row, perPeriod.get(row.period)?.get(row.categoryId) ?? 0, carry.get(row.id) ?? 0),
   );
+}
+
+/**
+ * Menyalakan atau mematikan bawaan sisa.
+ *
+ * Tidak ada migrasi data yang perlu terjadi: bawaannya dihitung dari
+ * transaksi, jadi menyalakannya hari ini langsung memperlihatkan sisa
+ * periode-periode yang sudah lewat, dan mematikannya mengembalikan batas ke
+ * jatah polos tanpa kehilangan apa pun.
+ */
+export async function setBudgetRollover(
+  deps: LedgerDeps,
+  userId: string,
+  id: string,
+  rollover: boolean,
+  now = new Date(),
+): Promise<Budget> {
+  const row = await repo.updateBudget(deps.db, userId, id, { rollover });
+  if (!row) throw new DomainError('not_found', 'anggaran tidak ditemukan');
+
+  const range = periodStart(row.period, now);
+  const spent = await repo.spentPerCategory(deps.db, userId, range.from, range.to);
+  const carry = await carryOverFor(deps, userId, [row], now);
+
+  return toBudget(row, spent.get(row.categoryId) ?? 0, carry.get(row.id) ?? 0);
 }
 
 export async function createBudget(
@@ -429,6 +460,7 @@ export async function createBudget(
     period: BudgetRow['period'];
     amount: number;
     currency?: string | undefined;
+    rollover?: boolean | undefined;
   },
   now = new Date(),
 ): Promise<Budget> {
@@ -449,6 +481,7 @@ export async function createBudget(
     amount: input.amount,
     currency,
     startsOn: toDateString(periodStart(input.period, now).from),
+    rollover: input.rollover ?? false,
   });
 
   const range = periodStart(row.period, now);

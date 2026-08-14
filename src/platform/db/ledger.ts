@@ -1,6 +1,7 @@
 import { relations, sql } from 'drizzle-orm';
 import {
   bigint,
+  boolean,
   check,
   date,
   index,
@@ -184,6 +185,17 @@ export const budgets = pgTable(
      *  supaya bulan yang sudah lewat tidak berubah surut. */
     startsOn: date('starts_on').notNull(),
     endsOn: date('ends_on'),
+    /**
+     * Sisa periode lalu ikut ke periode ini.
+     *
+     * Sisanya TIDAK disimpan di kolom mana pun — ia dihitung dari transaksi
+     * setiap kali diminta. Sisa yang disimpan adalah angka yang harus
+     * disepakati dengan buku besar, dan tidak ada yang menegakkan
+     * kesepakatannya: satu transaksi lama yang diubah membuat sisanya salah
+     * selamanya, diam-diam. Alasan yang sama dengan `opening_balance` yang
+     * disimpan sementara saldo berjalan tidak.
+     */
+    rollover: boolean('rollover').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

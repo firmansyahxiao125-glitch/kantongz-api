@@ -65,6 +65,15 @@ export interface Budget {
   startsOn: string;
   /** Terpakai dalam periode berjalan, dihitung dari transaksi. */
   spent: number;
+  /** Sisa periode lalu ikut ke periode ini. */
+  rollover: boolean;
+  /**
+   * Bawaan dari periode-periode sebelumnya. Positif berarti sisa, NEGATIF
+   * berarti utang dari periode yang jebol. Selalu 0 ketika `rollover` mati.
+   */
+  carryOver: number;
+  /** `amount + carryOver`, tidak pernah di bawah nol. Ini yang diukur `spent`. */
+  limit: number;
 }
 
 export interface Goal {

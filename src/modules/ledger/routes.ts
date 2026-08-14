@@ -78,7 +78,9 @@ const schemas = {
     period: z.enum(['weekly', 'monthly', 'yearly']).default('monthly'),
     amount: amount.positive(),
     currency: currency.optional(),
+    rollover: z.boolean().optional(),
   }),
+  updateBudget: z.object({ rollover: z.boolean() }),
   createGoal: z.object({
     name: z.string().trim().min(1).max(80),
     targetAmount: amount.positive(),
@@ -281,6 +283,17 @@ export function registerLedgerRoutes(app: App, deps: LedgerRouteDeps): void {
     const userId = await callerId(request);
     await service.deleteGoal(deps, userId, request.params.id);
     void reply.send(success({}, request.requestId));
+  });
+
+  app.patch<{ Params: { id: string } }>('/v1/budgets/:id', async (request, reply) => {
+    const userId = await callerId(request);
+    const body = parse(schemas.updateBudget, request.body);
+    void reply.send(
+      success(
+        await service.setBudgetRollover(deps, userId, request.params.id, body.rollover),
+        request.requestId,
+      ),
+    );
   });
 
   /*

@@ -115,6 +115,33 @@ export function periodStart(
 }
 
 /**
+ * Periode-periode SEBELUM yang memuat `at`, terlama dulu.
+ *
+ * Dihitung dengan mundur satu milidetik dari awal setiap periode: satu
+ * milidetik sebelum awal periode ini selalu jatuh di periode sebelumnya,
+ * berapa pun panjangnya dan apa pun aturan zonanya. Aritmetika "kurangi 30
+ * hari" akan salah pada bulan yang panjangnya bukan 30 dan pada hari
+ * peralihan waktu musim panas.
+ */
+export function previousPeriods(
+  period: 'weekly' | 'monthly' | 'yearly',
+  at: Date,
+  count: number,
+  timeZone: string = DEFAULT_TIMEZONE,
+): Range[] {
+  const hasil: Range[] = [];
+  let batas = periodStart(period, at, timeZone).from;
+
+  for (let i = 0; i < count; i += 1) {
+    const sebelumnya = periodStart(period, new Date(batas.getTime() - 1), timeZone);
+    hasil.push(sebelumnya);
+    batas = sebelumnya.from;
+  }
+
+  return hasil.reverse();
+}
+
+/**
  * Tengah hari lokal pada sebuah tanggal kalender, sebagai titik waktu UTC.
  *
  * TENGAH HARI, bukan tengah malam. Transaksi tanggal 1 yang disimpan sebagai
