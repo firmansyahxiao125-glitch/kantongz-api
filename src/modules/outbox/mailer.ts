@@ -60,6 +60,30 @@ const TEMPLATES: Record<OutboxTopic, Template> = {
         'Kalau kamu tidak meminta pemulihan, abaikan email ini — sandimu tidak berubah.',
       ].join('\n'),
   },
+  /*
+   * Peringatan masuk dari perangkat baru.
+   *
+   * Nadanya sengaja TENANG. Sebagian besar penerima memang baru berganti
+   * peramban atau ponsel, dan email yang membunyikan alarm setiap kali itu
+   * terjadi akan diabaikan justru pada kali yang benar-benar penting.
+   *
+   * Kalimat terakhir memberi TINDAKAN, bukan sekadar kabar: pemberitahuan
+   * keamanan tanpa jalan keluar hanya memindahkan kecemasan ke pembacanya.
+   */
+  'email.new_device': {
+    subject: 'Masuk dari perangkat baru',
+    body: (p) =>
+      [
+        `Halo${p.name ? ` ${p.name}` : ''},`,
+        '',
+        `Akunmu baru saja dipakai masuk dari perangkat baru${p.device ? `: ${p.device}` : ''}.`,
+        '',
+        'Kalau itu kamu, tidak ada yang perlu dilakukan.',
+        '',
+        'Kalau bukan, buka Pusat Keamanan di KANTONGZ dan akhiri sesi perangkat itu —',
+        'tokennya langsung dicabut. Sesudah itu ganti kata sandimu.',
+      ].join('\n'),
+  },
   'email.password_changed': {
     subject: 'Kata sandi KANTONGZ diubah',
     body: (p) =>

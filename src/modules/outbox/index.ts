@@ -17,7 +17,11 @@ import { newId } from '../audit/index.js';
  * `published_at` gagal — tidak menghasilkan email kedua.
  */
 
-export type OutboxTopic = 'email.verify' | 'email.reset' | 'email.password_changed';
+export type OutboxTopic =
+  | 'email.verify'
+  | 'email.reset'
+  | 'email.password_changed'
+  | 'email.new_device';
 
 export interface EmailPayload {
   to: string;
@@ -25,6 +29,13 @@ export interface EmailPayload {
   code?: string;
   /** Nama penerima, untuk sapaan. */
   name?: string;
+  /**
+   * Perangkat yang memicu pesan, sudah berupa label yang dapat dibaca
+   * ("web · Chrome"). SENGAJA bukan User-Agent utuh: email peringatan yang
+   * memuat satu paragraf teknis membuat orang berhenti membacanya, dan yang
+   * perlu dijawab pembacanya cuma satu — "apakah itu aku?".
+   */
+  device?: string;
 }
 
 export interface OutboxMessage {

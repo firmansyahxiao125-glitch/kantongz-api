@@ -161,13 +161,18 @@ export interface DeviceInput {
  *
  * Mengembalikan `devices.id` INTERNAL — itulah yang masuk ke klaim `did`,
  * bukan `deviceId` mentah dari klien. JWT terbaca siapa pun yang memegangnya.
+ *
+ * `isNew` ikut dikembalikan karena HANYA fungsi ini yang tahu. Pemanggil yang
+ * ingin mengetahuinya sendiri harus menanyakan basis data sekali lagi, dan
+ * pertanyaan kedua itu BALAPAN: dua permintaan masuk serentak dari perangkat
+ * yang sama dapat sama-sama menyimpulkan "baru" dan mengirim dua peringatan.
  */
 export async function upsertDevice(
   db: Database,
   keys: KeyProvider,
   userId: string,
   input: DeviceInput,
-): Promise<string> {
+): Promise<{ id: string; isNew: boolean }> {
   const hash = hmacDigest(keys, input.deviceId);
 
   const existing = await db
@@ -179,7 +184,7 @@ export async function upsertDevice(
   const found = existing[0];
   if (found) {
     await db.update(devices).set({ lastSeenAt: new Date() }).where(eq(devices.id, found.id));
-    return found.id;
+    return { id: found.id, isNew: false };
   }
 
   const id = newId('dev');
@@ -193,7 +198,7 @@ export async function upsertDevice(
     appVersion: input.appVersion ?? null,
   });
 
-  return id;
+  return { id, isNew: true };
 }
 
 export async function listDevices(db: Database, userId: string) {

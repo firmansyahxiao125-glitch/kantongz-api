@@ -21,6 +21,7 @@ import {
   type KeyProvider,
 } from '../../platform/crypto/index.js';
 import { writeAudit, type AuditEntry } from '../audit/index.js';
+import { enqueue } from '../outbox/index.js';
 import { issueAccessToken, type IssuerConfig } from '../tokens/jwt.js';
 import type { KeyRing } from '../tokens/keys.js';
 import {
@@ -91,13 +92,37 @@ async function grantSession(
   userId: string,
   device: DeviceInfo,
   now: number,
+  /*
+   * Peringatan perangkat baru HANYA untuk masuk, bukan untuk pendaftaran.
+   *
+   * Pada pendaftaran perangkatnya SELALU baru — memberitahukannya berarti
+   * mengirim peringatan keamanan tentang tindakan yang baru saja dilakukan
+   * pengguna itu sendiri, satu detik sesudah ia melakukannya. Peringatan yang
+   * berbunyi pada kejadian normal adalah peringatan yang diabaikan pada
+   * kejadian yang sesungguhnya.
+   */
+  alertPerangkatBaru = false,
 ): Promise<Session> {
-  const deviceRowId = await repo.upsertDevice(deps.db, deps.keys, userId, {
+  const perangkat = await repo.upsertDevice(deps.db, deps.keys, userId, {
     deviceId: device.deviceId,
     platform: device.platform,
     model: device.model,
     appVersion: device.appVersion,
   });
+  const deviceRowId = perangkat.id;
+
+  if (alertPerangkatBaru && perangkat.isNew) {
+    /*
+     * Kunci idempotensi memuat id perangkat, bukan waktu: satu perangkat baru
+     * menghasilkan TEPAT satu peringatan seumur hidupnya, berapa kali pun
+     * baris ini terpanggil ulang.
+     */
+    await enqueue(deps.db, 'email.new_device', `new-device:${deviceRowId}`, {
+      to: user.email,
+      name: user.fullName,
+      device: [device.platform, device.model].filter(Boolean).join(' · '),
+    });
+  }
 
   const sessionId = await repo.createSession(
     deps.db,
@@ -196,7 +221,14 @@ export async function signIn(
 
   await clearFailures(deps.redis, email);
 
-  const session = await grantSession(deps, account.user, account.row.id, input.device, Date.now());
+  const session = await grantSession(
+    deps,
+    account.user,
+    account.row.id,
+    input.device,
+    Date.now(),
+    true,
+  );
 
   await audit(deps, {
     event: 'sign_in_success',
@@ -500,13 +532,18 @@ export async function refresh(
 
   /* Perangkat dipetakan ke id internal lebih dulu supaya perbandingannya
      memakai satuan yang sama dengan yang tersimpan di sesi. */
+  /* Penyegaran token TIDAK memicu peringatan perangkat baru: perangkatnya
+     sudah dikenal sejak sesi ini dibuat, dan `upsertDevice` di sini hanya
+     memperbarui `lastSeenAt`. */
   const deviceRowId = session
-    ? await repo.upsertDevice(deps.db, deps.keys, session.userId, {
-        deviceId: input.device.deviceId,
-        platform: input.device.platform,
-        model: input.device.model,
-        appVersion: input.device.appVersion,
-      })
+    ? (
+        await repo.upsertDevice(deps.db, deps.keys, session.userId, {
+          deviceId: input.device.deviceId,
+          platform: input.device.platform,
+          model: input.device.model,
+          appVersion: input.device.appVersion,
+        })
+      ).id
     : '';
 
   let cacheHealthy = true;
