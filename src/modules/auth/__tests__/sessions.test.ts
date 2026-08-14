@@ -1,7 +1,7 @@
 import type { LightMyRequestResponse } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { DEVICE, createHarness, type Harness } from './harness.js';
+import { createHarness, type Harness } from './harness.js';
 
 /**
  * Daftar sesi aktif, dan pengakhiran satu sesi.
