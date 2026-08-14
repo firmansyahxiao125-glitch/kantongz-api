@@ -378,6 +378,36 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
           },
         },
 
+        ImportReport: {
+          type: 'object',
+          required: ['total', 'imported', 'duplicate', 'failed', 'dryRun', 'results'],
+          additionalProperties: false,
+          properties: {
+            total: { type: 'integer', minimum: 0 },
+            imported: {
+              type: 'integer',
+              minimum: 0,
+              description: 'Pada pratinjau berarti "akan masuk".',
+            },
+            duplicate: { type: 'integer', minimum: 0 },
+            failed: { type: 'integer', minimum: 0 },
+            dryRun: { type: 'boolean', description: 'true berarti tidak ada yang ditulis.' },
+            results: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['index', 'status', 'reason'],
+                additionalProperties: false,
+                properties: {
+                  index: { type: 'integer', minimum: 0 },
+                  status: { type: 'string', enum: ['imported', 'duplicate', 'error'] },
+                  reason: { type: ['string', 'null'] },
+                },
+              },
+            },
+          },
+        },
+
         RecurringInput: {
           type: 'object',
           required: ['name', 'accountId', 'kind', 'amount', 'cadence', 'startsOn'],
@@ -1476,6 +1506,50 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
           responses: {
             '201': { description: 'tujuan', content: json(envelope(ref('Goal'))) },
             ...errors('invalid_input', 'conflict', 'session_expired'),
+          },
+        },
+      },
+
+      '/v1/transactions/import': {
+        post: {
+          tags: ['buku besar'],
+          summary: 'Mengimpor transaksi dari berkas',
+          description:
+            'Bawaannya PRATINJAU (`dryRun: true`): seluruh pemeriksaan dijalankan dan tidak satu baris pun ditulis. Duplikat dikenali dari dompet, jenis, jumlah, HARI lokal, dan merchant — termasuk kembaran di dalam berkas yang sama.',
+          security: SECURED,
+          requestBody: {
+            required: true,
+            content: json({
+              type: 'object',
+              required: ['rows'],
+              additionalProperties: false,
+              properties: {
+                dryRun: { type: 'boolean', default: true },
+                rows: {
+                  type: 'array',
+                  maxItems: 500,
+                  items: {
+                    type: 'object',
+                    required: ['accountId', 'kind', 'amount', 'occurredAt'],
+                    additionalProperties: false,
+                    properties: {
+                      accountId: { type: 'string' },
+                      counterAccountId: { type: 'string' },
+                      categoryId: { type: 'string' },
+                      kind: { type: 'string', enum: ['income', 'expense', 'transfer'] },
+                      amount: { type: 'integer', minimum: 1 },
+                      occurredAt: { type: 'integer', description: 'Epoch milidetik.' },
+                      merchant: { type: 'string', maxLength: 120 },
+                      note: { type: 'string', maxLength: 280 },
+                    },
+                  },
+                },
+              },
+            }),
+          },
+          responses: {
+            '200': { description: 'laporan impor', content: json(envelope(ref('ImportReport'))) },
+            ...errors('invalid_input', 'session_expired'),
           },
         },
       },

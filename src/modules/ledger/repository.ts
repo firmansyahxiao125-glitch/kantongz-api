@@ -690,6 +690,41 @@ export async function deleteGoal(db: Database, userId: string, id: string): Prom
   return rows.length > 0;
 }
 
+/**
+ * Sidik jari transaksi yang sudah ada dalam sebuah rentang.
+ *
+ * Hanya lima kolom, dan itu disengaja: impor berkas seribu baris hanya perlu
+ * tahu APA yang sudah ada, bukan seluruh isinya. Mengambil baris utuh untuk
+ * enam bulan riwayat berarti menahan puluhan megabita di memori peladen demi
+ * satu perbandingan kesetaraan.
+ */
+export async function transactionFingerprints(
+  db: Database,
+  userId: string,
+  from: Date,
+  to: Date,
+): Promise<
+  { accountId: string; kind: TransactionRow['kind']; amount: number; occurredAt: Date; merchant: string | null }[]
+> {
+  return db
+    .select({
+      accountId: transactions.accountId,
+      kind: transactions.kind,
+      amount: transactions.amount,
+      occurredAt: transactions.occurredAt,
+      merchant: transactions.merchant,
+    })
+    .from(transactions)
+    .where(
+      and(
+        eq(transactions.userId, userId),
+        isNull(transactions.deletedAt),
+        gte(transactions.occurredAt, from),
+        lte(transactions.occurredAt, to),
+      ),
+    );
+}
+
 /* ── aturan berulang ─────────────────────────────────────────────────── */
 
 export async function listRules(db: Database, userId: string): Promise<RecurringRuleRow[]> {

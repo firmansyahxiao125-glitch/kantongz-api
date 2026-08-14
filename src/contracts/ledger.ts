@@ -78,6 +78,23 @@ export interface Goal {
   achieved: boolean;
 }
 
+/** Nasib satu baris impor. `imported` pada pratinjau berarti "akan masuk". */
+export interface ImportOutcome {
+  index: number;
+  status: 'imported' | 'duplicate' | 'error';
+  reason: string | null;
+}
+
+export interface ImportReport {
+  total: number;
+  imported: number;
+  duplicate: number;
+  failed: number;
+  /** `true` berarti tidak ada satu baris pun yang ditulis. */
+  dryRun: boolean;
+  results: ImportOutcome[];
+}
+
 export type Cadence = 'daily' | 'weekly' | 'monthly';
 
 /**

@@ -6,6 +6,7 @@ import { success } from '../../http/envelope.js';
 import type { App } from '../../http/types.js';
 import { verifyAccessToken, type IssuerConfig } from '../tokens/jwt.js';
 import type { KeyRing } from '../tokens/keys.js';
+import { MAX_ROWS, importTransactions } from './impor.js';
 import * as recurring from './recurring.js';
 import * as service from './service.js';
 import type { LedgerDeps } from './service.js';
@@ -101,6 +102,25 @@ const schemas = {
     endsOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   }),
   pauseRecurring: z.object({ paused: z.boolean() }),
+  import: z.object({
+    /* Bawaannya PRATINJAU. Kelalaian menyertakan bendera ini tidak boleh
+       berakhir dengan lima ratus baris yang tertulis tanpa diminta. */
+    dryRun: z.boolean().default(true),
+    rows: z
+      .array(
+        z.object({
+          accountId: id,
+          counterAccountId: id.optional(),
+          categoryId: id.optional(),
+          kind: z.enum(['income', 'expense', 'transfer']),
+          amount: amount.positive(),
+          occurredAt: z.number().int().positive(),
+          merchant: z.string().trim().max(120).optional(),
+          note: z.string().trim().max(280).optional(),
+        }),
+      )
+      .max(MAX_ROWS),
+  }),
   cashflowQuery: z.object({
     days: z.coerce.number().int().min(1).max(365).optional(),
     months: z.coerce.number().int().min(1).max(60).optional(),
@@ -261,6 +281,25 @@ export function registerLedgerRoutes(app: App, deps: LedgerRouteDeps): void {
     const userId = await callerId(request);
     await service.deleteGoal(deps, userId, request.params.id);
     void reply.send(success({}, request.requestId));
+  });
+
+  /*
+   * Impor berkas.
+   *
+   * `bodyLimit` sendiri, karena batas global 16 KB (§2) memang dipilih untuk
+   * badan permintaan yang berisi satu objek. Lima ratus baris transaksi
+   * melampauinya jauh — dan batasnya TETAP ADA, hanya digeser ke angka yang
+   * dihitung dari batas barisnya sendiri.
+   */
+  app.post('/v1/transactions/import', { bodyLimit: 1_048_576 }, async (request, reply) => {
+    const userId = await callerId(request);
+    const body = parse(schemas.import, request.body);
+    void reply.send(
+      success(
+        await importTransactions(deps, userId, body.rows, { dryRun: body.dryRun }),
+        request.requestId,
+      ),
+    );
   });
 
   /* ── aturan berulang ─────────────────────────────────────────────────── */
