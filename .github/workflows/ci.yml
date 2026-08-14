@@ -60,6 +60,114 @@ jobs:
       - name: Build
         run: npm run build
 
+  # ── Gerbang keamanan terhadap peladen yang BENAR-BENAR BERJALAN ───────
+  #
+  # Uji satuan menegakkan aturan di dalam satu proses. Pekerjaan ini
+  # menegakkannya di batas HTTP, tempat penyerang sebenarnya berdiri: IDOR,
+  # token yang sudah dicabut, CORS lintas-asal, kebocoran hash sandi, dan
+  # penulisan ganda aturan berulang di bawah tiga putaran serentak.
+  #
+  # TANPA docker compose, dan itu disengaja. `services:` sudah menyediakan
+  # ketiga dependensinya; menambah compose berarti membangun citra lebih
+  # dulu lalu menunggu boot kedua kalinya, demi tumpukan yang identik.
+  #
+  # Yang dijalankan adalah ENTRI PRODUKSI (`dist/index.js`), bukan entri
+  # pengembangan — gerbang yang menguji jalur berbeda dari yang disebarkan
+  # menguji hal yang berbeda.
+  #
+  # Mailpit ikut, dan itu bukan kemewahan: tanpa SMTP_HOST pekerja outbox
+  # berjalan dalam mode catat-saja yang menuliskan SUBJEK saja, tidak pernah
+  # kodenya. Jadi `--logfile` hanya bekerja pada entri pengembangan. Dengan
+  # Mailpit, jalur email yang ditempuh gerbang ini adalah SMTP sungguhan.
+  keamanan:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kantongz
+          POSTGRES_PASSWORD: kantongz
+          POSTGRES_DB: kantongz
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U kantongz"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+      mailpit:
+        image: axllent/mailpit:latest
+        ports: ['1025:1025', '8025:8025']
+        env:
+          MP_SMTP_AUTH_ACCEPT_ANY: '1'
+          MP_SMTP_AUTH_ALLOW_INSECURE: '1'
+
+    env:
+      DATABASE_URL: postgres://kantongz:kantongz@localhost:5432/kantongz
+      REDIS_URL: redis://localhost:6379
+      JWT_ISSUER: https://api.kantongz.id
+      JWT_AUDIENCE: kantongz-mobile
+      # Asal yang gerbangnya harapkan diizinkan. Yang lain WAJIB ditolak.
+      CORS_ORIGINS: http://localhost:3100
+      PORT: '3000'
+      SMTP_HOST: localhost
+      SMTP_PORT: '1025'
+      # Alamat TELANJANG. `Nama <alamat>` ditolak validasi konfigurasi, dan
+      # peladen gagal boot dengan pesan yang tidak menyebut langkah mana.
+      MAIL_FROM: no-reply@kantongz.test
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm }
+      - run: npm ci
+
+      # Kunci dibangkitkan SEGAR tiap jalanan. Kunci uji yang ter-commit
+      # adalah kunci yang suatu hari dipakai di tempat lain.
+      #
+      # Keluarannya `KEY=value` satu baris per kunci, dan PEM-nya memuat
+      # `\n` harfiah — bukan baris baru sungguhan — jadi aman ditulis ke
+      # `$GITHUB_ENV` tanpa penanda heredoc.
+      - name: Bangkitkan kunci
+        run: node scripts/generate-keys.mjs >> "$GITHUB_ENV"
+
+      - name: Migrasi
+        run: npm run db:migrate
+
+      - name: Build
+        run: npm run build
+
+      - name: Tunggu Mailpit
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8025/api/v1/messages > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "Mailpit tidak pernah siap"; exit 1
+
+      - name: Nyalakan peladen
+        run: |
+          node dist/index.js > server.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:3000/readyz > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "peladen tidak pernah siap"; cat server.log; exit 1
+
+      - name: Gerbang keamanan
+        run: node scripts/security.mjs --mailpit http://localhost:8025
+
+      # Log peladen HANYA saat gagal, dan hanya sebagai artefak: ia memuat
+      # kode verifikasi enam angka milik akun uji.
+      - name: Log peladen
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with: { name: server-log, path: server.log, retention-days: 3 }
+
   docker:
     runs-on: ubuntu-latest
     steps:
