@@ -21,7 +21,8 @@ export type OutboxTopic =
   | 'email.verify'
   | 'email.reset'
   | 'email.password_changed'
-  | 'email.new_device';
+  | 'email.new_device'
+  | 'email.due_reminder';
 
 export interface EmailPayload {
   to: string;
@@ -29,6 +30,23 @@ export interface EmailPayload {
   code?: string;
   /** Nama penerima, untuk sapaan. */
   name?: string;
+  /**
+   * Tagihan yang akan jatuh tempo. Hanya pada `email.due_reminder`. G1.
+   *
+   * Disimpan sebagai muatan, bukan dibaca ulang saat kirim. Antrean dapat
+   * tertunda berjam-jam, dan aturannya mungkin sudah diubah atau dihapus
+   * ketika gilirannya tiba — email yang membaca ulang akan mengabarkan angka
+   * yang berbeda dari yang membuatnya dikirim, atau gagal sama sekali.
+   */
+  jatuhTempo?: {
+    judul: string;
+    /** Rupiah bulat. */
+    jumlah: number;
+    /** `YYYY-MM-DD`. */
+    tanggal: string;
+    /** 0 berarti hari ini. */
+    sisaHari: number;
+  };
   /**
    * Perangkat yang memicu pesan, sudah berupa label yang dapat dibaca
    * ("web · Chrome"). SENGAJA bukan User-Agent utuh: email peringatan yang
@@ -57,19 +75,30 @@ export const MAX_ATTEMPTS = 5;
  * `db` di sini boleh berupa handle transaksi — dan pada jalur pendaftaran
  * memang harus, karena itulah satu-satunya yang membuat "akun terbuat" dan
  * "email diantrekan" menjadi satu keputusan atomik.
+ *
+ * @returns `true` bila pesannya benar-benar tersisip, `false` bila kunci itu
+ *          sudah ada. Sebagian besar pemanggil tidak peduli — bagi mereka
+ *          keduanya berarti "sudah diantrekan". Yang peduli adalah pemindai
+ *          pengingat (G1), yang melaporkan berapa email BARU dihasilkan satu
+ *          putaran; tanpa angka itu, putaran yang mengantrekan seribu email
+ *          dan putaran yang tidak mengantrekan satu pun terlihat sama persis
+ *          di log.
  */
 export async function enqueue(
   db: Database,
   topic: OutboxTopic,
   idempotencyKey: string,
   payload: EmailPayload,
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const rows = await db
     .insert(outbox)
     .values({ id: newId('obx'), topic, idempotencyKey, payload })
     /* Kunci yang sama berarti pesan yang sama sudah diantrekan. Mengabaikannya
        di sini membuat pemanggil aman diulang tanpa harus memeriksa lebih dulu. */
-    .onConflictDoNothing({ target: outbox.idempotencyKey });
+    .onConflictDoNothing({ target: outbox.idempotencyKey })
+    .returning({ id: outbox.id });
+
+  return rows.length > 0;
 }
 
 /**

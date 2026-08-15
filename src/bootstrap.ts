@@ -11,6 +11,7 @@ import { registerInsight } from './modules/insight/wiring.js';
 import { registerAssistant } from './modules/assistant/wiring.js';
 import { registerReceipt } from './modules/receipt/wiring.js';
 import type { ReceiptReader } from './modules/receipt/reader.js';
+import { createKeyProvider } from './platform/crypto/keys.js';
 import { seedSystemCategories } from './modules/ledger/seed.js';
 import { createHttpMailer, type Mailer } from './modules/outbox/mailer.js';
 import { createSmtpMailer } from './modules/outbox/smtp.js';
@@ -134,6 +135,13 @@ export async function bootstrap(
      yang lambat tidak boleh menunda pencatatan tagihan, dan sebaliknya. */
   const recurring = startRecurringWorker({
     db: db.db,
+    /* Dibutuhkan pemindai pengingat (G1): alamat email tersimpan terenkripsi,
+       dan pengingat adalah satu-satunya surat yang dikirim tanpa permintaan
+       pengguna — jadi tidak ada permintaan HTTP yang sudah membawa kuncinya. */
+    keys: createKeyProvider({
+      master: config.MASTER_KEY,
+      activeHmacVersion: config.HMAC_KEY_VERSION,
+    }),
     logger,
     intervalMs: config.RECURRING_INTERVAL_MS,
   });

@@ -21,6 +21,7 @@
     "verify": "bash scripts/verify-standalone.sh",
     "loadtest": "node scripts/loadtest.mjs",
     "security": "node scripts/security.mjs",
+    "pengingat": "node scripts/pengingat.mjs",
     "check:templates": "node scripts/check-templates.mjs"
   },
   "dependencies": {

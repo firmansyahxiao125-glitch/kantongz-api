@@ -95,7 +95,71 @@ const TEMPLATES: Record<OutboxTopic, Template> = {
         'Kalau bukan kamu yang melakukannya, segera pulihkan akses dan hubungi kami.',
       ].join('\n'),
   },
+  /*
+   * Pengingat jatuh tempo. G1.
+   *
+   * Kalimat pertamanya memuat SELURUH kabarnya — nama tagihan, nominal, dan
+   * kapan. Pengingat dibaca di layar kunci ponsel dan sering tidak dibuka;
+   * yang menaruh angkanya di paragraf ketiga sama saja tidak mengirimkannya.
+   *
+   * Tidak ada tautan, sama seperti seluruh surat lain di berkas ini. Email
+   * keuangan yang melatih pembacanya mengeklik tautan adalah pelatihan yang
+   * dimanfaatkan phishing — dan pengingat tagihan justru bentuk yang paling
+   * sering dipalsukan.
+   */
+  'email.due_reminder': {
+    subject: 'Tagihan akan jatuh tempo',
+    body: (p) => {
+      const d = p.jatuhTempo;
+      const kapan =
+        d === undefined
+          ? ''
+          : d.sisaHari === 0
+            ? 'hari ini'
+            : d.sisaHari === 1
+              ? 'besok'
+              : `${String(d.sisaHari)} hari lagi (${tanggalPanjang(d.tanggal)})`;
+
+      return [
+        `Halo${p.name ? ` ${p.name}` : ''},`,
+        '',
+        d === undefined
+          ? 'Ada tagihan berulang yang akan segera jatuh tempo.'
+          : `${d.judul} sebesar ${rupiah(d.jumlah)} jatuh tempo ${kapan}.`,
+        '',
+        'KANTONGZ akan mencatatnya sendiri pada tanggal itu. Pengingat ini supaya',
+        'saldomu sudah siap sebelum tercatat.',
+        '',
+        'Kalau tagihan ini sudah tidak berlaku, jeda atau hapus aturannya di',
+        'halaman Transaksi Berulang.',
+      ].join('\n');
+    },
+  },
 };
+
+/** Rupiah bulat, format Indonesia. Tidak pernah pecahan — §2. */
+function rupiah(jumlah: number): string {
+  return `Rp ${jumlah.toLocaleString('id-ID')}`;
+}
+
+/**
+ * `2026-08-17` menjadi `17 Agustus 2026`.
+ *
+ * Ditulis tangan, bukan lewat `Intl` atas `new Date(...)`: mengurai tanggal
+ * kalender menjadi `Date` memaksanya melewati zona waktu, dan tanggal yang
+ * sudah benar sebagai kalender tidak punya urusan dengan jam.
+ */
+const BULAN = [
+  'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+  'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember',
+];
+
+function tanggalPanjang(iso: string): string {
+  const [tahun, bulan, hari] = iso.split('-');
+  const nama = BULAN[Number(bulan) - 1];
+  if (tahun === undefined || nama === undefined || hari === undefined) return iso;
+  return `${String(Number(hari))} ${nama} ${tahun}`;
+}
 
 export function render(topic: OutboxTopic, payload: EmailPayload): {
   subject: string;
