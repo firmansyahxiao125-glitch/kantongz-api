@@ -926,3 +926,44 @@ export async function countRuns(db: Database, ruleId: string): Promise<number> {
     .where(eq(recurringRuns.ruleId, ruleId));
   return rows[0]?.n ?? 0;
 }
+
+/**
+ * Riwayat merchant→kategori milik SATU pengguna. G2.
+ *
+ * Dikelompokkan di basis data, bukan di Node. Pengguna dengan lima tahun
+ * pembukuan punya puluhan ribu transaksi, dan menariknya seluruhnya ke memori
+ * hanya untuk menghitung berapa kali "INDOMARET" ditandai "Belanja" adalah
+ * kueri yang melambat persis pada pengguna yang paling banyak memakai
+ * aplikasinya.
+ *
+ * Yang tidak punya merchant atau tidak punya kategori dibuang di sini:
+ * keduanya tidak dapat mengajarkan apa pun tentang pemetaan merchant ke
+ * kategori.
+ */
+export async function riwayatMerchant(
+  db: Database,
+  userId: string,
+): Promise<{ merchant: string; categoryId: string; jumlah: number }[]> {
+  const rows = await db
+    .select({
+      merchant: transactions.merchant,
+      categoryId: transactions.categoryId,
+      jumlah: sql<number>`count(*)::int`,
+    })
+    .from(transactions)
+    .where(
+      and(
+        eq(transactions.userId, userId),
+        isNull(transactions.deletedAt),
+        sql`${transactions.merchant} IS NOT NULL`,
+        sql`${transactions.categoryId} IS NOT NULL`,
+      ),
+    )
+    .groupBy(transactions.merchant, transactions.categoryId);
+
+  return rows.flatMap((r) =>
+    r.merchant === null || r.categoryId === null
+      ? []
+      : [{ merchant: r.merchant, categoryId: r.categoryId, jumlah: r.jumlah }],
+  );
+}

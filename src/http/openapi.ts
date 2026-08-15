@@ -297,6 +297,27 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
           },
         },
 
+        SaranKategori: {
+          type: 'object',
+          nullable: true,
+          required: ['categoryId', 'keyakinan', 'alasan', 'sumber'],
+          properties: {
+            categoryId: { type: 'string' },
+            keyakinan: {
+              type: 'string',
+              enum: ['tinggi', 'sedang', 'rendah'],
+              description:
+                'Diturunkan dari konsistensi riwayat, bukan dari banyaknya data. Usulan dari kamus tidak pernah `tinggi`.',
+            },
+            alasan: {
+              type: 'string',
+              description:
+                'Kalimat siap tampil, memuat angkanya. Usulan tanpa sebab hanya bisa dipercaya atau diabaikan, tidak ditimbang.',
+            },
+            sumber: { type: 'string', enum: ['riwayat', 'kamus'] },
+          },
+        },
+
         Transaction: {
           type: 'object',
           required: [
@@ -1457,6 +1478,41 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
           responses: {
             '201': { description: 'transaksi', content: json(envelope(ref('Transaction'))) },
             ...errors('not_found', 'invalid_input', 'session_expired'),
+          },
+        },
+      },
+
+      '/v1/transactions/suggest-category': {
+        get: {
+          tags: ['transaksi'],
+          summary: 'Mengusulkan kategori dari nama merchant',
+          description:
+            'MENYARANKAN, tidak memutuskan: rute ini tidak menulis apa pun, dan tidak ada jalur ' +
+            'lain yang memakainya untuk mengisi `categoryId` secara diam-diam. Kategori salah ' +
+            'yang dipasang otomatis merusak anggaran bulan itu sekaligus laporan tahunannya, ' +
+            'dan tidak seorang pun akan tahu baris mana yang ditebak mesin — sementara usulan ' +
+            'yang salah dibuang dengan satu ketukan. ' +
+            'Riwayat pengguna selalu mengalahkan kamus bawaan. `keyakinan` diturunkan dari ' +
+            'KONSISTENSI riwayat, bukan dari banyaknya data: merchant yang terbagi rata antara ' +
+            'dua kategori menghasilkan `rendah`, bukan tebakan yang percaya diri. Usulan dari ' +
+            'kamus tidak pernah `tinggi`. ' +
+            'Membalas `data: null` bila tidak ada usulan yang pantas — termasuk ketika ' +
+            'merchant tidak dikenali sama sekali.',
+          security: SECURED,
+          parameters: [
+            {
+              name: 'merchant',
+              in: 'query',
+              required: true,
+              schema: { type: 'string', minLength: 1, maxLength: 120 },
+            },
+          ],
+          responses: {
+            '200': {
+              description: 'usulan, atau null bila tidak ada yang pantas',
+              content: json(envelope(ref('SaranKategori'))),
+            },
+            ...errors('invalid_input', 'session_expired'),
           },
         },
       },

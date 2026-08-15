@@ -104,6 +104,10 @@ const schemas = {
     endsOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   }),
   pauseRecurring: z.object({ paused: z.boolean() }),
+  /* G2. Panjangnya dibatasi seperti kolom merchant di transaksi — masukan
+     yang lebih panjang daripada yang mungkin tersimpan tidak dapat berasal
+     dari pemakaian yang sah. */
+  suggestQuery: z.object({ merchant: z.string().trim().min(1).max(120) }),
   import: z.object({
     /* Bawaannya PRATINJAU. Kelalaian menyertakan bendera ini tidak boleh
        berakhir dengan lima ratus baris yang tertulis tanpa diminta. */
@@ -209,6 +213,22 @@ export function registerLedgerRoutes(app: App, deps: LedgerRouteDeps): void {
     const userId = await callerId(request);
     const query = parse(schemas.transactionQuery, request.query);
     void reply.send(success(await service.listTransactions(deps, userId, query), request.requestId));
+  });
+
+  /**
+   * Usulan kategori dari nama merchant. G2.
+   *
+   * GET, dan itu keputusan yang disengaja: rute ini tidak mengubah apa pun,
+   * jadi ia harus terlihat seperti rute yang tidak mengubah apa pun. Kelirunya
+   * memakai POST di sini bukan gaya penulisan — ia mengaburkan satu-satunya
+   * jaminan yang membuat fitur ini boleh ada, yaitu bahwa ia MENYARANKAN.
+   */
+  app.get('/v1/transactions/suggest-category', async (request, reply) => {
+    const userId = await callerId(request);
+    const query = parse(schemas.suggestQuery, request.query);
+    void reply.send(
+      success(await service.suggestCategory(deps, userId, query.merchant), request.requestId),
+    );
   });
 
   app.post('/v1/transactions', async (request, reply) => {

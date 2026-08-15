@@ -22,6 +22,7 @@ import { DEFAULT_CURRENCY, assertAmount, isSupportedCurrency } from './money.js'
 import { daysBack, monthRange, periodStart, previousMonthRange, toDateString } from './periods.js';
 import * as repo from './repository.js';
 import { carryOverFor, limitOf } from './rollover.js';
+import { sarankanKategori, type Saran } from './saran-kategori.js';
 
 /**
  * Aturan buku besar.
@@ -618,4 +619,36 @@ export async function dashboard(
     budgets: budgetList,
     goals: goalList,
   };
+}
+
+/**
+ * Mengusulkan kategori untuk sebuah nama merchant. G2.
+ *
+ * ── FUNGSI INI TIDAK MENULIS APA PUN, DAN ITU BUKAN KEBETULAN ──────────
+ *
+ * Tidak ada `db.insert`, tidak ada `db.update`, dan tidak ada pemanggil di
+ * jalur `createTransaction` yang memakainya untuk mengisi `categoryId` secara
+ * diam-diam. Usulannya berjalan lewat rutenya sendiri, dijawab ke klien, dan
+ * berhenti di sana.
+ *
+ * Kategori salah yang dipasang otomatis merusak anggaran bulan itu DAN
+ * laporan tahunannya, dan tidak seorang pun akan tahu baris mana yang ditebak
+ * mesin. Usulan yang salah dibuang dengan satu ketukan. Seluruh rancangan G2
+ * berdiri di atas asimetri itu.
+ */
+export async function suggestCategory(
+  deps: LedgerDeps,
+  userId: string,
+  merchant: string,
+): Promise<Saran | null> {
+  const [riwayat, kategori] = await Promise.all([
+    repo.riwayatMerchant(deps.db, userId),
+    repo.listCategories(deps.db, userId),
+  ]);
+
+  /* Nama kategori sistem diterjemahkan menjadi id MILIK pengguna ini.
+     Kamus menyimpan nama karena id kategori sistem berbeda di tiap basis
+     data — ia ditanam saat boot, bukan lewat migrasi. */
+  const perNama = new Map(kategori.map((k) => [k.name, k.id]));
+  return sarankanKategori(merchant, riwayat, (nama) => perNama.get(nama) ?? null);
 }
