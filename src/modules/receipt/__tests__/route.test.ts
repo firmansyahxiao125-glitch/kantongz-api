@@ -138,3 +138,59 @@ describe('penjaga rute', () => {
     expect(res.statusCode).toBeLessThan(500);
   }, 30_000);
 });
+
+/* ── F1: metadata dibuang SEBELUM apa pun menyentuhnya ────────────────── */
+
+describe('privasi gambar', () => {
+  /**
+   * Uji ini berbeda jenis dari `metadata.test.ts`.
+   *
+   * Yang di sana membuktikan FUNGSINYA benar. Yang di sini membuktikan
+   * RUTENYA memakainya — dan keduanya gagal secara terpisah. Fungsi
+   * pembersih yang sempurna tetapi tidak pernah dipanggil adalah keadaan
+   * yang paling mudah terjadi dan paling sulit terlihat: seluruh uji
+   * satuannya hijau, dan setiap foto tetap tersimpan bersama GPS-nya.
+   */
+  function pngBerEXIF(): Buffer {
+    const potongan = (tipe: string, isi: Buffer): Buffer => {
+      const panjang = Buffer.alloc(4);
+      panjang.writeUInt32BE(isi.length);
+      return Buffer.concat([panjang, Buffer.from(tipe, 'latin1'), isi, Buffer.alloc(4)]);
+    };
+    return Buffer.concat([
+      PNG_HEADER,
+      potongan('IHDR', Buffer.alloc(13, 1)),
+      potongan('eXIf', Buffer.from('GPSLatitude=-6.2088 GPSLongitude=106.8456', 'latin1')),
+      potongan('IDAT', Buffer.alloc(24, 7)),
+      potongan('IEND', Buffer.alloc(0)),
+    ]);
+  }
+
+  it('pembaca TIDAK PERNAH menerima byte EXIF', async () => {
+    const terlihat: Buffer[] = [];
+    h.receiptReader.read = (image: Buffer) => {
+      terlihat.push(Buffer.from(image));
+      return Promise.resolve({
+        merchant: null,
+        total: null,
+        occurredAt: null,
+        confidence: 'rendah' as const,
+        totalLine: null,
+      });
+    };
+
+    await scan(pngBerEXIF());
+
+    expect(terlihat).toHaveLength(1);
+    expect(terlihat[0]?.includes(Buffer.from('GPSLatitude'))).toBe(false);
+    expect(terlihat[0]?.includes(Buffer.from('eXIf'))).toBe(false);
+    /* Gambarnya sendiri harus tetap sampai — dibuang metadatanya, bukan
+       dibuang seluruhnya. */
+    expect(terlihat[0]?.includes(Buffer.from('IDAT'))).toBe(true);
+  }, 30_000);
+
+  it('menolak format yang metadatanya tidak dapat diperiksa', async () => {
+    const res = await scan(Buffer.from('GIF89a bukan format yang didukung'));
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+  }, 30_000);
+});

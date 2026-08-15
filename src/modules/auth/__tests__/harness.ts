@@ -16,6 +16,7 @@ import { registerInsight } from '../../insight/wiring.js';
 import { registerAccount } from '../../account/wiring.js';
 import { registerAssistant } from '../../assistant/wiring.js';
 import { registerReceipt } from '../../receipt/wiring.js';
+import type { ReceiptReader } from '../../receipt/reader.js';
 import { seedSystemCategories } from '../../ledger/seed.js';
 import type { App } from '../../../http/types.js';
 
@@ -120,6 +121,8 @@ export interface Harness {
   app: App;
   db: Database;
   redis: FakeRedis;
+  /** Pembaca struk, dibuka supaya uji dapat mengintip masukan OCR-nya. */
+  receiptReader: ReceiptReader;
   /** Kode terakhir yang "dikirim" — menggantikan kotak masuk. */
   lastCode: () => Delivery | null;
   close: () => Promise<void>;
@@ -227,6 +230,13 @@ export async function createHarness(): Promise<Harness> {
     app,
     db,
     redis,
+    /* Dibuka supaya uji dapat MENGINTIP apa yang benar-benar sampai ke OCR.
+
+       Tanpa ini, satu-satunya cara memeriksa bahwa metadata gambar sudah
+       dibuang adalah menebak dari keluaran OCR — dan keluaran OCR tidak
+       menyebutkan byte yang tidak ada. Pembersih yang sempurna tetapi tidak
+       pernah dipanggil akan lolos setiap uji lain. */
+    receiptReader: receipt,
     lastCode: () => delivered,
     close: async () => {
       await app.close();

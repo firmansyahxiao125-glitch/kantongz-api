@@ -4,6 +4,7 @@ import { success } from '../../http/envelope.js';
 import type { App } from '../../http/types.js';
 import { verifyAccessToken, type IssuerConfig } from '../tokens/jwt.js';
 import type { KeyRing } from '../tokens/keys.js';
+import { buangMetadata } from './metadata.js';
 import { MAX_IMAGE_BYTES, type ReceiptReader } from './reader.js';
 
 /**
@@ -51,6 +52,29 @@ export function registerReceiptRoutes(app: App, deps: ReceiptRouteDeps): void {
       throw new DomainError('invalid_input', 'kirim gambar sebagai badan permintaan');
     }
 
-    void reply.send(success(await deps.reader.read(body), request.requestId));
+    /*
+       Metadata dibuang di TITIK MASUK, sebelum OCR menyentuhnya.
+
+       Foto struk dari ponsel membawa jauh lebih banyak daripada yang terlihat
+       — koordinat GPS, model perangkat, cap waktu sampai detik. Pada aplikasi
+       keuangan itu berarti riwayat belanja seseorang membawa serta riwayat
+       LOKASI-nya.
+
+       Dibuang di sini dan bukan sebelum penyimpanan, karena sekali sebuah
+       buffer masuk lebih dalam ia akan tercatat di log, di jejak galat, dan
+       di mana pun ia sempat lewat. Titik masuk satu-satunya tempat yang
+       benar-benar dapat dijamin.
+
+       Format yang tidak dikenali DITOLAK, bukan dilewatkan: melewatkannya
+       berarti berkas yang metadatanya tidak pernah diperiksa tetap ikut
+       diproses, dan seluruh gunanya pemeriksaan ini hilang pada berkas
+       pertama yang formatnya di luar dugaan.
+    */
+    const bersih = buangMetadata(body);
+    if (bersih === null) {
+      throw new DomainError('invalid_input', 'format gambar tidak didukung; kirim JPEG atau PNG');
+    }
+
+    void reply.send(success(await deps.reader.read(bersih.data), request.requestId));
   });
 }
