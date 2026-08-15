@@ -46,6 +46,27 @@ export function registerAccountRoutes(app: App, deps: AccountRouteDeps): void {
   });
 
   /*
+   * Memulihkan pembukuan dari berkas ekspor.
+   *
+   * Bawaannya PRATINJAU, sama seperti impor CSV, dan atas alasan yang lebih
+   * kuat: yang diserahkan di sini seluruh pembukuan seseorang. Kelalaian
+   * menyertakan satu bendera tidak boleh berakhir dengan ribuan baris yang
+   * tertulis tanpa diminta.
+   */
+  app.post('/v1/account/restore', async (request, reply) => {
+    const userId = await caller(request);
+    const body = request.body as { dryRun?: unknown; data?: unknown } | undefined;
+    const dryRun = body?.dryRun !== false;
+
+    void reply.send(
+      success(
+        await service.restoreAccount(deps, userId, body?.data, { dryRun }, request.requestId),
+        request.requestId,
+      ),
+    );
+  });
+
+  /*
    * Menutup akun. Kata sandi diminta lagi — tindakan ini tidak dapat
    * dibatalkan sendiri oleh pengguna, dan perangkat yang tertinggal tidak
    * terkunci tidak boleh cukup untuk melakukannya.

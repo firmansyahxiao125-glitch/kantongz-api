@@ -1,4 +1,5 @@
 import { AppError } from '../../contracts/errors.js';
+import { DomainError } from '../../contracts/domain.js';
 import type { Database } from '../../platform/db/client.js';
 import { verifyPassword, type KeyProvider } from '../../platform/crypto/index.js';
 import { writeAudit } from '../audit/index.js';
@@ -6,6 +7,7 @@ import * as authRepo from '../auth/repository.js';
 import * as recurring from '../ledger/recurring.js';
 import * as ledger from '../ledger/service.js';
 import * as repo from './repository.js';
+import { rencanakanPemulihan, type Rencana } from './pemulihan.js';
 
 /**
  * Siklus hidup akun: mengunduh seluruh data, dan menutup akun.
@@ -148,4 +150,178 @@ export async function closeAccount(
     actorId: userId,
     requestId,
   });
+}
+
+/* ── PEMULIHAN DARI EKSPOR (F2) ───────────────────────────────────────── */
+
+export interface HasilPemulihan {
+  /** Benar bila tidak ada yang benar-benar ditulis. */
+  pratinjau: boolean;
+  jumlah: Rencana['jumlah'];
+  dilewati: Rencana['dilewati'];
+}
+
+/**
+ * Memulihkan pembukuan dari berkas ekspor.
+ *
+ * ── BAWAANNYA PRATINJAU ────────────────────────────────────────────────
+ *
+ * Sama seperti impor CSV di modul buku besar, dan atas alasan yang lebih
+ * kuat: yang diserahkan di sini seluruh pembukuan seseorang. Kelalaian
+ * menyertakan satu bendera tidak boleh berakhir dengan ribuan baris yang
+ * tertulis tanpa diminta.
+ *
+ * ── MENOLAK PEMBUKUAN YANG SUDAH BERISI ────────────────────────────────
+ *
+ * Pemulihan bukan penggabungan. Menuangkan berkas ekspor ke atas pembukuan
+ * yang sudah punya isi menghasilkan setiap dompet, setiap anggaran, dan
+ * setiap transaksi DUA KALI — dan tidak ada tombol untuk membatalkannya.
+ *
+ * Orang yang benar-benar ingin menggabungkan punya jalan lain yang memang
+ * dirancang untuk itu: impor CSV, yang mendeteksi duplikat baris demi baris.
+ *
+ * ── ID DIBUAT ULANG OLEH PEMBUATNYA SENDIRI ────────────────────────────
+ *
+ * Baris tidak disisipkan langsung ke tabel. Ia dibuat lewat fungsi buku besar
+ * yang sama dengan yang dipakai antarmuka — yang menegakkan kepemilikan,
+ * memvalidasi bentuknya, dan menghitung saldo. Menulis langsung ke tabel
+ * berarti satu jalur kedua yang aturannya harus diingat terpisah, dan jalur
+ * kedua selalu tertinggal.
+ */
+export async function restoreAccount(
+  deps: AccountDeps,
+  userId: string,
+  berkas: unknown,
+  opsi: { dryRun: boolean },
+  requestId: string,
+): Promise<HasilPemulihan> {
+  const led = { db: deps.db };
+
+  /* Nol dipakai sebagai id sementara: yang dipakai pelaksana hanya KUNCI
+     petanya (id lama mana yang ada), bukan nilainya. Nilai sebenarnya lahir
+     dari pembuat masing-masing. */
+  const rencana = rencanakanPemulihan(berkas, (jenis, urutan) => `${jenis}-${String(urutan)}`);
+  if (!rencana.ok) {
+    throw new DomainError('invalid_input', rencana.detail);
+  }
+
+  if (opsi.dryRun) {
+    return { pratinjau: true, jumlah: rencana.jumlah, dilewati: rencana.dilewati };
+  }
+
+  const dompetAda = await ledger.listAccounts(led, userId);
+  if (dompetAda.length > 0) {
+    throw new DomainError(
+      'conflict',
+      'pemulihan hanya dapat dijalankan pada pembukuan yang masih kosong; pakai impor CSV untuk menggabungkan',
+    );
+  }
+
+  const b = berkas as Record<string, unknown>;
+  const larik = (k: string): Record<string, unknown>[] =>
+    Array.isArray(b[k]) ? (b[k] as Record<string, unknown>[]) : [];
+
+  const teks = (x: unknown): string | undefined =>
+    typeof x === 'string' && x.length > 0 ? x : undefined;
+  const angka = (x: unknown): number | undefined => (typeof x === 'number' ? x : undefined);
+
+  const petaDompet = new Map<string, string>();
+  for (const w of larik('wallets')) {
+    const dibuat = await ledger.createAccount(led, userId, {
+      name: teks(w.name) ?? 'Dompet',
+      kind: (teks(w.kind) ?? 'cash') as 'cash',
+      ...(teks(w.currency) === undefined ? {} : { currency: teks(w.currency) }),
+      ...(angka(w.openingBalance) === undefined ? {} : { openingBalance: angka(w.openingBalance) }),
+    });
+    const lama = teks(w.id);
+    if (lama !== undefined) petaDompet.set(lama, dibuat.id);
+  }
+
+  const petaKategori = new Map<string, string>();
+  for (const c of larik('categories')) {
+    const dibuat = await ledger.createCategory(led, userId, {
+      name: teks(c.name) ?? 'Kategori',
+      kind: (teks(c.kind) ?? 'expense') as 'expense',
+      /* Ikon dan warna WAJIB di pembuatnya. Berkas ekspor lama boleh saja
+         tidak memilikinya, dan menolak seluruh berkas karena satu bidang
+         hiasan yang hilang adalah kekakuan yang tidak melindungi apa pun. */
+      icon: teks(c.icon) ?? 'tag',
+      color: teks(c.color) ?? '#7f7f8b',
+    });
+    const lama = teks(c.id);
+    if (lama !== undefined) petaKategori.set(lama, dibuat.id);
+  }
+
+  for (const t of larik('transactions')) {
+    const akunLama = teks(t.accountId);
+    const akunBaru = akunLama === undefined ? undefined : petaDompet.get(akunLama);
+    if (akunBaru === undefined) continue;
+
+    const lawanLama = teks(t.counterAccountId);
+    const lawanBaru = lawanLama === undefined ? undefined : petaDompet.get(lawanLama);
+    const katLama = teks(t.categoryId);
+    const katBaru = katLama === undefined ? undefined : petaKategori.get(katLama);
+
+    await ledger.createTransaction(led, userId, {
+      accountId: akunBaru,
+      ...(lawanBaru === undefined ? {} : { counterAccountId: lawanBaru }),
+      ...(katBaru === undefined ? {} : { categoryId: katBaru }),
+      kind: (teks(t.kind) ?? 'expense') as 'expense',
+      amount: angka(t.amount) ?? 0,
+      occurredAt: angka(t.occurredAt) ?? Date.now(),
+      ...(teks(t.note) === undefined ? {} : { note: teks(t.note) }),
+      ...(teks(t.merchant) === undefined ? {} : { merchant: teks(t.merchant) }),
+    });
+  }
+
+  for (const a of larik('budgets')) {
+    const katLama = teks(a.categoryId);
+    const katBaru = katLama === undefined ? undefined : petaKategori.get(katLama);
+    if (katBaru === undefined) continue;
+
+    await ledger.createBudget(led, userId, {
+      categoryId: katBaru,
+      period: (teks(a.period) ?? 'monthly') as 'monthly',
+      amount: angka(a.amount) ?? 0,
+      ...(teks(a.startsOn) === undefined ? {} : { startsOn: teks(a.startsOn) }),
+    });
+  }
+
+  for (const g of larik('goals')) {
+    await ledger.createGoal(led, userId, {
+      name: teks(g.name) ?? 'Tujuan',
+      targetAmount: angka(g.targetAmount) ?? 0,
+      ...(teks(g.targetDate) === undefined ? {} : { targetDate: teks(g.targetDate) }),
+      ...(teks(g.color) === undefined ? {} : { color: teks(g.color) }),
+    });
+  }
+
+  for (const r of larik('recurring')) {
+    const akunLama = teks(r.accountId);
+    const akunBaru = akunLama === undefined ? undefined : petaDompet.get(akunLama);
+    if (akunBaru === undefined) continue;
+
+    const katLama = teks(r.categoryId);
+    const katBaru = katLama === undefined ? undefined : petaKategori.get(katLama);
+
+    await recurring.createRecurring(led, userId, {
+      name: teks(r.name) ?? 'Aturan',
+      accountId: akunBaru,
+      ...(katBaru === undefined ? {} : { categoryId: katBaru }),
+      kind: (teks(r.kind) ?? 'expense') as 'expense',
+      amount: angka(r.amount) ?? 0,
+      cadence: (teks(r.cadence) ?? 'monthly') as 'monthly',
+      interval: angka(r.interval) ?? 1,
+      startsOn: teks(r.startsOn) ?? new Date().toISOString().slice(0, 10),
+    });
+  }
+
+  await writeAudit(deps.db, deps.keys, {
+    event: 'account_restored',
+    severity: 'warning',
+    actorId: userId,
+    requestId,
+  });
+
+  return { pratinjau: false, jumlah: rencana.jumlah, dilewati: rencana.dilewati };
 }

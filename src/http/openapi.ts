@@ -1102,6 +1102,54 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
         },
       },
 
+      '/v1/account/restore': {
+        post: {
+          tags: ['autentikasi'],
+          summary: 'Memulihkan pembukuan dari berkas ekspor',
+          description:
+            'Bawaannya PRATINJAU: tanpa `dryRun: false` tidak satu baris pun ditulis, dan yang ' +
+            'dikembalikan hanya hitungan beserta daftar yang akan dilewati. ' +
+            'Hanya berjalan pada pembukuan yang MASIH KOSONG — pemulihan bukan penggabungan, ' +
+            'dan menuangkannya ke atas pembukuan berisi menghasilkan setiap baris dua kali ' +
+            'tanpa tombol pembatalan. Untuk menggabungkan, pakai impor CSV yang memang ' +
+            'mendeteksi duplikat baris demi baris. ' +
+            'Seluruh id dibuat ULANG: id di dalam berkas milik akun lain, dan memakainya ' +
+            'kembali membawa jejak akun lama ke dalam akun baru selamanya.',
+          security: SECURED,
+          requestBody: {
+            required: true,
+            content: json({
+              type: 'object',
+              required: ['data'],
+              properties: {
+                data: { type: 'object', description: 'isi berkas ekspor apa adanya' },
+                dryRun: {
+                  type: 'boolean',
+                  default: true,
+                  description: 'false untuk benar-benar menulis',
+                },
+              },
+            }),
+          },
+          responses: {
+            '200': {
+              description: 'hitungan yang dipulihkan, dan yang dilewati beserta sebabnya',
+              content: json(
+                envelope({
+                  type: 'object',
+                  properties: {
+                    pratinjau: { type: 'boolean' },
+                    jumlah: { type: 'object' },
+                    dilewati: { type: 'array', items: { type: 'object' } },
+                  },
+                }),
+              ),
+            },
+            ...errors('session_expired', 'invalid_input', 'conflict'),
+          },
+        },
+      },
+
       '/v1/account/close': {
         post: {
           tags: ['autentikasi'],

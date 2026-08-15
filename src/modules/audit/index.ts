@@ -40,7 +40,12 @@ export type AuditEvent =
   /* Penutupan akun oleh pemiliknya. Dicatat `warning`, bukan `info`: ia tidak
      dapat dibatalkan sendiri oleh pengguna, dan kalau ternyata bukan dia yang
      melakukannya, baris inilah satu-satunya jejak kapan itu terjadi. */
-  | 'account_closed';
+  | 'account_closed'
+  /* Pemulihan dari berkas ekspor. Dicatat `warning` seperti penutupan, dan
+     atas alasan yang sama: ia menulis SELURUH pembukuan sekaligus, dan kalau
+     ternyata bukan pemiliknya yang melakukannya, baris inilah satu-satunya
+     jejak kapan itu terjadi. */
+  | 'account_restored';
 
 export interface AuditEntry {
   event: AuditEvent;
