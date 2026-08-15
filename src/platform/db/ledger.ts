@@ -340,6 +340,55 @@ export const transactionsRelations = relations(transactions, ({ one }) => ({
   category: one(categories, { fields: [transactions.categoryId], references: [categories.id] }),
 }));
 
+/**
+ * Pecahan satu transaksi ke beberapa kategori. F3.
+ *
+ * ── TABEL TAMBAHAN, BUKAN PENGGANTI ────────────────────────────────────
+ *
+ * `transactions.category_id` TIDAK dihapus dan tidak dikosongkan. Ia tetap
+ * berisi kategori UTAMA — pecahan bernominal terbesar — supaya penyaringan
+ * daftar, berkas ekspor, dan setiap laporan yang belum tahu apa-apa tentang
+ * pecahan tetap menjawab sesuatu yang masuk akal alih-alih `null`.
+ *
+ * Transaksi tanpa pecahan tidak punya satu baris pun di sini. Itu sengaja:
+ * mayoritas transaksi tidak dipecah, dan menuliskan satu baris pecahan untuk
+ * masing-masing hanya menggandakan tabel terbesar di basis data ini.
+ */
+export const transactionSplits = pgTable(
+  'transaction_splits',
+  {
+    id: text('id').primaryKey(),
+    transactionId: text('transaction_id')
+      .notNull()
+      /* Ikut terhapus bersama transaksinya. Pecahan yang transaksinya hilang
+         adalah uang yang tidak menunjuk apa pun. */
+      .references(() => transactions.id, { onDelete: 'cascade' }),
+    categoryId: text('category_id')
+      .notNull()
+      /*
+         `restrict`, BUKAN `set null` seperti pada transaksi.
+
+         Kategori transaksi boleh menjadi null — barisnya masih menyimpan
+         nominal dan tanggalnya. Pecahan tanpa kategori tidak menyimpan apa
+         pun yang berguna: ia justru menjadi nominal yang tidak terhitung di
+         laporan mana pun, dan jumlah pecahannya berhenti cocok dengan
+         transaksinya.
+      */
+      .references(() => categories.id, { onDelete: 'restrict' }),
+    amount: bigint('amount', { mode: 'number' }).notNull(),
+    note: text('note'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('transaction_splits_transaction').on(t.transactionId),
+    /* Agregasi laporan berangkat dari kategori, bukan dari transaksi. */
+    index('transaction_splits_category').on(t.categoryId),
+    /* Satu kategori sekali per transaksi. Dua baris berkategori sama bukan
+       pemecahan melainkan satu baris yang ditulis dua kali. */
+    uniqueIndex('transaction_splits_once').on(t.transactionId, t.categoryId),
+  ],
+);
+
 export type WalletAccountRow = typeof walletAccounts.$inferSelect;
 export type CategoryRow = typeof categories.$inferSelect;
 export type TransactionRow = typeof transactions.$inferSelect;
@@ -347,3 +396,4 @@ export type BudgetRow = typeof budgets.$inferSelect;
 export type GoalRow = typeof goals.$inferSelect;
 export type RecurringRuleRow = typeof recurringRules.$inferSelect;
 export type RecurringRunRow = typeof recurringRuns.$inferSelect;
+export type TransactionSplitRow = typeof transactionSplits.$inferSelect;

@@ -108,6 +108,21 @@ const schemas = {
      yang lebih panjang daripada yang mungkin tersimpan tidak dapat berasal
      dari pemakaian yang sah. */
   suggestQuery: z.object({ merchant: z.string().trim().min(1).max(120) }),
+  /* F3. Jumlahnya TIDAK diperiksa di sini: ia bergantung pada nominal
+     transaksi, yang baru diketahui sesudah kepemilikannya terbukti. Skema
+     hanya menjaga bentuknya. */
+  splits: z.object({
+    splits: z
+      .array(
+        z.object({
+          categoryId: z.string().min(1),
+          amount: z.number().int().positive(),
+          note: z.string().trim().max(280).optional(),
+        }),
+      )
+      .min(1)
+      .max(20),
+  }),
   import: z.object({
     /* Bawaannya PRATINJAU. Kelalaian menyertakan bendera ini tidak boleh
        berakhir dengan lima ratus baris yang tertulis tanpa diminta. */
@@ -237,6 +252,36 @@ export function registerLedgerRoutes(app: App, deps: LedgerRouteDeps): void {
     void reply
       .status(201)
       .send(success(await service.createTransaction(deps, userId, body), request.requestId));
+  });
+
+  /**
+   * Memecah satu transaksi ke beberapa kategori. F3.
+   *
+   * PUT, bukan POST: himpunan pecahan diganti SELURUHNYA, dan mengirim badan
+   * yang sama dua kali menghasilkan keadaan yang sama. Tambal sebagian
+   * menuntut pemanggilnya menjaga sendiri agar jumlahnya tetap cocok dengan
+   * nominal transaksi — dan setiap jalur yang lupa meninggalkan pembukuan
+   * yang tidak cocok tanpa satu galat pun.
+   */
+  app.put<{ Params: { id: string } }>('/v1/transactions/:id/splits', async (request, reply) => {
+    const userId = await callerId(request);
+    const body = parse(schemas.splits, request.body);
+    void reply.send(
+      success(
+        await service.setTransactionSplits(deps, userId, request.params.id, body.splits),
+        request.requestId,
+      ),
+    );
+  });
+
+  app.delete<{ Params: { id: string } }>('/v1/transactions/:id/splits', async (request, reply) => {
+    const userId = await callerId(request);
+    void reply.send(
+      success(
+        await service.clearTransactionSplits(deps, userId, request.params.id),
+        request.requestId,
+      ),
+    );
   });
 
   app.put<{ Params: { id: string } }>('/v1/transactions/:id', async (request, reply) => {

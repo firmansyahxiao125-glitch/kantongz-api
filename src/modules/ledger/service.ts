@@ -16,11 +16,13 @@ import type {
   CategoryRow,
   GoalRow,
   TransactionRow,
+  TransactionSplitRow,
   WalletAccountRow,
 } from '../../platform/db/ledger.js';
 import { DEFAULT_CURRENCY, assertAmount, isSupportedCurrency } from './money.js';
 import { daysBack, monthRange, periodStart, previousMonthRange, toDateString } from './periods.js';
 import * as repo from './repository.js';
+import { kategoriUtama, periksaPecahan, type BarisPecahan } from './pecahan.js';
 import { carryOverFor, limitOf } from './rollover.js';
 import { sarankanKategori, type Saran } from './saran-kategori.js';
 
@@ -70,7 +72,7 @@ function toCategory(row: CategoryRow): Category {
   };
 }
 
-function toTransaction(row: TransactionRow): Transaction {
+function toTransaction(row: TransactionRow, pecahan?: TransactionSplitRow[]): Transaction {
   return {
     id: row.id,
     accountId: row.accountId,
@@ -82,6 +84,17 @@ function toTransaction(row: TransactionRow): Transaction {
     occurredAt: row.occurredAt.getTime(),
     note: row.note,
     merchant: row.merchant,
+    /* `null` bila tidak dipecah — bukan `[]`. Larik kosong berarti "dipecah
+       menjadi nol bagian", keadaan yang tidak sah dan tidak pernah ada. */
+    splits:
+      pecahan === undefined || pecahan.length === 0
+        ? null
+        : pecahan.map((p) => ({
+            id: p.id,
+            categoryId: p.categoryId,
+            amount: p.amount,
+            note: p.note,
+          })),
   };
 }
 
@@ -260,8 +273,17 @@ export async function listTransactions(
   const page = rows.slice(0, limit);
   const last = page.at(-1);
 
+  /* Satu kueri untuk seluruh halaman, bukan satu per baris. Memanggil
+     `listSplits` di dalam `map` menghasilkan seratus kueri untuk satu
+     halaman — bentuk N+1 yang paling mudah masuk tanpa disadari, karena
+     tiap panggilannya sendiri terlihat wajar. */
+  const pecahan = await repo.splitsForTransactions(
+    deps.db,
+    page.map((r) => r.id),
+  );
+
   return {
-    items: page.map(toTransaction),
+    items: page.map((r) => toTransaction(r, pecahan.get(r.id))),
     nextCursor: rows.length > limit && last ? repo.encodeCursor(last) : null,
   };
 }
@@ -386,7 +408,85 @@ export async function updateTransaction(
   });
 
   if (!row) throw new DomainError('not_found', 'transaksi tidak ditemukan');
-  return toTransaction(row);
+
+  /*
+     ── PECAHAN DIBUANG KETIKA NOMINALNYA BERUBAH. F3 ────────────────────
+
+     Bukan disesuaikan, bukan diskalakan. Pecahan lama menjumlah ke nominal
+     LAMA, dan begitu nominalnya berganti, jumlahnya berhenti cocok — persis
+     keadaan yang membuat satu transaksi punya dua nilai dan setiap laporan
+     yang membaca keduanya tidak pernah cocok.
+
+     Menskalakannya secara proporsional terdengar membantu dan menghasilkan
+     angka yang tidak pernah dipilih siapa pun: 30.000/20.000 pada transaksi
+     yang naik ke 60.000 menjadi 36.000/24.000, dua angka yang tidak ada di
+     struk mana pun. Lebih jujur mengembalikannya ke kategori utama dan
+     membiarkan pengguna memecah ulang kalau ia memang mau.
+  */
+  if (existing.amount !== row.amount) {
+    await repo.replaceSplits(deps.db, id, []);
+  }
+
+  return toTransaction(row, await repo.listSplits(deps.db, id));
+}
+
+/**
+ * Mengganti seluruh pecahan sebuah transaksi. F3.
+ *
+ * Seluruhnya di dalam SATU transaksi basis data: penghapusan yang berhasil
+ * lalu penyisipan yang gagal meninggalkan transaksi tanpa pecahan sama
+ * sekali — dan `category_id`-nya sudah terlanjur menunjuk kategori utama yang
+ * sekarang tidak punya rincian.
+ */
+export async function setTransactionSplits(
+  deps: LedgerDeps,
+  userId: string,
+  id: string,
+  baris: BarisPecahan[],
+): Promise<Transaction> {
+  const existing = await repo.findTransaction(deps.db, userId, id);
+  if (!existing) throw new DomainError('not_found', 'transaksi tidak ditemukan');
+
+  if (existing.kind === 'transfer') {
+    /* Transfer memindahkan uang antar dompet MILIK SENDIRI; ia tidak
+       dibelanjakan ke kategori apa pun, jadi tidak ada yang bisa dipecah. */
+    throw new DomainError('invalid_input', 'transfer tidak dapat dipecah ke kategori');
+  }
+
+  /* Kepemilikan kategori diselesaikan SEKALI di sini, lalu diserahkan ke
+     pemeriksa sebagai himpunan — supaya aturan pecahannya sendiri tetap
+     dapat diuji tanpa Postgres. */
+  const kategori = await repo.listCategories(deps.db, userId);
+  const sah = new Set(
+    kategori.filter((k) => k.kind === existing.kind).map((k) => k.id),
+  );
+
+  periksaPecahan(baris, existing.amount, sah);
+
+  const utama = kategoriUtama(baris);
+
+  const hasil = await deps.db.transaction(async (tx) => {
+    await repo.replaceSplits(tx, id, baris);
+    /* `category_id` TIDAK dibuang — ia mengikuti pecahan terbesar. Itulah
+       yang membuat penyaringan, ekspor, dan laporan lama tetap berarti. */
+    return repo.updateTransactionCategory(tx, userId, id, utama);
+  });
+
+  if (!hasil) throw new DomainError('not_found', 'transaksi tidak ditemukan');
+  return toTransaction(hasil, await repo.listSplits(deps.db, id));
+}
+
+/** Membatalkan pemecahan. Transaksinya tetap ada, kategorinya tetap yang utama. */
+export async function clearTransactionSplits(
+  deps: LedgerDeps,
+  userId: string,
+  id: string,
+): Promise<Transaction> {
+  const existing = await repo.findTransaction(deps.db, userId, id);
+  if (!existing) throw new DomainError('not_found', 'transaksi tidak ditemukan');
+
+  await repo.replaceSplits(deps.db, id, []);
+  return toTransaction(existing, []);
 }
 
 export async function deleteTransaction(

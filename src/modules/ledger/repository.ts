@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 
 import type { Database } from '../../platform/db/client.js';
 import {
@@ -7,6 +7,7 @@ import {
   goals,
   recurringRules,
   recurringRuns,
+  transactionSplits,
   transactions,
   walletAccounts,
   type BudgetRow,
@@ -14,6 +15,7 @@ import {
   type GoalRow,
   type RecurringRuleRow,
   type TransactionRow,
+  type TransactionSplitRow,
   type WalletAccountRow,
 } from '../../platform/db/ledger.js';
 import { newId } from '../audit/index.js';
@@ -515,6 +517,42 @@ export interface BreakdownRow {
   total: number;
 }
 
+/**
+ * ── ATRIBUSI KATEGORI YANG SADAR PECAHAN. F3 ───────────────────────────
+ *
+ * Dua ekspresi ini dipakai oleh SETIAP agregasi per kategori, dan sengaja
+ * didefinisikan sekali: tiga kueri yang memilih sendiri-sendiri cara
+ * mengatribusikan nominal adalah tiga laporan yang suatu hari tidak lagi
+ * sepakat, dan yang berselisih tidak akan ketahuan sampai ada yang
+ * menjumlahkannya.
+ *
+ * Dipasangkan dengan `LEFT JOIN transaction_splits`, keduanya berperilaku
+ * begini:
+ *
+ *   transaksi TANPA pecahan  -> satu baris, sisi pecahannya NULL, jadi yang
+ *                               terpakai `transactions.category_id` dan
+ *                               `transactions.amount`. Persis seperti sebelum
+ *                               F3 ada.
+ *   transaksi BERPECAHAN     -> satu baris per pecahan, masing-masing memakai
+ *                               kategori dan nominal pecahannya sendiri.
+ *
+ * ── MENGAPA INI TIDAK MENGHITUNG GANDA ─────────────────────────────────
+ *
+ * Karena `periksaPecahan` menuntut jumlah pecahan SAMA PERSIS dengan nominal
+ * transaksinya. Satu baris berisi 50.000 dan tiga baris berisi 20.000 +
+ * 20.000 + 10.000 menjumlah ke angka yang sama, jadi total keseluruhan tidak
+ * bergerak sedikit pun — yang berubah hanya ke kategori mana ia jatuh.
+ *
+ * Invarian itulah yang membuat `LEFT JOIN` ini aman, dan itu sebabnya ia
+ * ditegakkan tanpa toleransi sama sekali. Melonggarkannya di sana akan
+ * merusak setiap laporan di sini, diam-diam.
+ */
+const KATEGORI_TERATRIBUSI = sql<
+  string | null
+>`COALESCE(${transactionSplits.categoryId}, ${transactions.categoryId})`;
+
+const NOMINAL_TERATRIBUSI = sql<number>`COALESCE(${transactionSplits.amount}, ${transactions.amount})`;
+
 export async function expenseByCategory(
   db: Database,
   userId: string,
@@ -524,13 +562,14 @@ export async function expenseByCategory(
 ): Promise<BreakdownRow[]> {
   const rows = await db
     .select({
-      categoryId: transactions.categoryId,
+      categoryId: KATEGORI_TERATRIBUSI,
       categoryName: categories.name,
       color: categories.color,
-      total: sql<string>`SUM(${transactions.amount})`,
+      total: sql<string>`SUM(${NOMINAL_TERATRIBUSI})`,
     })
     .from(transactions)
-    .leftJoin(categories, eq(categories.id, transactions.categoryId))
+    .leftJoin(transactionSplits, eq(transactionSplits.transactionId, transactions.id))
+    .leftJoin(categories, sql`${categories.id} = ${KATEGORI_TERATRIBUSI}`)
     .where(
       and(
         eq(transactions.userId, userId),
@@ -540,8 +579,8 @@ export async function expenseByCategory(
         lte(transactions.occurredAt, to),
       ),
     )
-    .groupBy(transactions.categoryId, categories.name, categories.color)
-    .orderBy(desc(sql`SUM(${transactions.amount})`))
+    .groupBy(sql`1, 2, 3`)
+    .orderBy(desc(sql`SUM(${NOMINAL_TERATRIBUSI})`))
     .limit(limit);
 
   return rows.map((row) => ({ ...row, total: Number(row.total) }));
@@ -619,10 +658,11 @@ export async function spentPerCategory(
 ): Promise<Map<string, number>> {
   const rows = await db
     .select({
-      categoryId: transactions.categoryId,
-      total: sql<string>`SUM(${transactions.amount})`,
+      categoryId: KATEGORI_TERATRIBUSI,
+      total: sql<string>`SUM(${NOMINAL_TERATRIBUSI})`,
     })
     .from(transactions)
+    .leftJoin(transactionSplits, eq(transactionSplits.transactionId, transactions.id))
     .where(
       and(
         eq(transactions.userId, userId),
@@ -632,7 +672,7 @@ export async function spentPerCategory(
         lte(transactions.occurredAt, to),
       ),
     )
-    .groupBy(transactions.categoryId);
+    .groupBy(sql`1`);
 
   const spent = new Map<string, number>();
   for (const row of rows) {
@@ -727,11 +767,12 @@ export async function spentPerCategoryPerDay(
 ): Promise<{ categoryId: string; day: string; total: number }[]> {
   const rows = await db
     .select({
-      categoryId: transactions.categoryId,
+      categoryId: KATEGORI_TERATRIBUSI,
       day: sql<string>`to_char(${transactions.occurredAt} AT TIME ZONE ${timeZone}, 'YYYY-MM-DD')`,
-      total: sql<string>`SUM(${transactions.amount})`,
+      total: sql<string>`SUM(${NOMINAL_TERATRIBUSI})`,
     })
     .from(transactions)
+    .leftJoin(transactionSplits, eq(transactionSplits.transactionId, transactions.id))
     .where(
       and(
         eq(transactions.userId, userId),
@@ -966,4 +1007,103 @@ export async function riwayatMerchant(
       ? []
       : [{ merchant: r.merchant, categoryId: r.categoryId, jumlah: r.jumlah }],
   );
+}
+
+/* ── pecahan transaksi. F3 ───────────────────────────────────────────── */
+
+export async function listSplits(
+  db: Database,
+  transactionId: string,
+): Promise<TransactionSplitRow[]> {
+  return db
+    .select()
+    .from(transactionSplits)
+    .where(eq(transactionSplits.transactionId, transactionId))
+    /* Terbesar dulu: itu urutan yang sama dengan cara kategori utama dipilih,
+       dan urutan yang sama dengan cara orang membaca rincian belanja. */
+    .orderBy(desc(transactionSplits.amount));
+}
+
+/**
+ * Pecahan untuk SEKUMPULAN transaksi sekaligus.
+ *
+ * Dipakai daftar transaksi. Memanggil `listSplits` sekali per baris akan
+ * menghasilkan seratus kueri untuk satu halaman — bentuk N+1 yang paling
+ * mudah masuk tanpa disadari, karena tiap panggilannya sendiri terlihat wajar.
+ */
+export async function splitsForTransactions(
+  db: Database,
+  transactionIds: string[],
+): Promise<Map<string, TransactionSplitRow[]>> {
+  const hasil = new Map<string, TransactionSplitRow[]>();
+  if (transactionIds.length === 0) return hasil;
+
+  const rows = await db
+    .select()
+    .from(transactionSplits)
+    .where(inArray(transactionSplits.transactionId, transactionIds))
+    .orderBy(desc(transactionSplits.amount));
+
+  for (const row of rows) {
+    const daftar = hasil.get(row.transactionId);
+    if (daftar) daftar.push(row);
+    else hasil.set(row.transactionId, [row]);
+  }
+  return hasil;
+}
+
+/**
+ * Mengganti SELURUH himpunan pecahan sebuah transaksi.
+ *
+ * Ganti-seluruhnya, bukan tambal sebagian. Pemutakhiran sebagian menuntut
+ * pemanggilnya menjaga sendiri agar jumlahnya tetap sama dengan nominal
+ * transaksi — dan setiap jalur yang lupa melakukannya meninggalkan pembukuan
+ * yang jumlahnya tidak cocok, tanpa satu galat pun.
+ *
+ * `db` WAJIB berupa handle transaksi. Penghapusan yang berhasil lalu
+ * penyisipan yang gagal meninggalkan transaksi tanpa pecahan sama sekali.
+ */
+export async function replaceSplits(
+  db: Database,
+  transactionId: string,
+  baris: { categoryId: string; amount: number; note?: string | null | undefined }[],
+): Promise<void> {
+  await db.delete(transactionSplits).where(eq(transactionSplits.transactionId, transactionId));
+
+  if (baris.length === 0) return;
+
+  await db.insert(transactionSplits).values(
+    baris.map((b) => ({
+      id: newId('spl'),
+      transactionId,
+      categoryId: b.categoryId,
+      amount: b.amount,
+      note: b.note ?? null,
+    })),
+  );
+}
+
+/**
+ * Mengganti kategori utama sebuah transaksi, tanpa menyentuh yang lain. F3.
+ *
+ * Terpisah dari `updateTransaction` dengan sengaja: yang itu mengganti
+ * SELURUH baris dari masukan pengguna, dan memakainya di sini menuntut
+ * pemanggil menyusun ulang seluruh transaksi hanya untuk memindahkan satu
+ * kolom — jalur yang paling mudah menjatuhkan `merchant` atau `note` secara
+ * tidak sengaja.
+ */
+export async function updateTransactionCategory(
+  db: Database,
+  userId: string,
+  id: string,
+  categoryId: string | null,
+): Promise<TransactionRow | null> {
+  const rows = await db
+    .update(transactions)
+    .set({ categoryId, updatedAt: new Date() })
+    .where(
+      and(eq(transactions.userId, userId), eq(transactions.id, id), isNull(transactions.deletedAt)),
+    )
+    .returning();
+  return rows[0] ?? null;
 }

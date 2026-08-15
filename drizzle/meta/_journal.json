@@ -43,6 +43,13 @@
       "when": 1786681145308,
       "tag": "0005_bawaan_sisa_anggaran",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786684145308,
+      "tag": "0006_pecahan_transaksi",
+      "breakpoints": true
     }
   ]
 }

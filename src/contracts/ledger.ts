@@ -48,6 +48,23 @@ export interface Transaction {
   occurredAt: number;
   note: string | null;
   merchant: string | null;
+  /**
+   * Rincian pemecahan ke beberapa kategori. F3.
+   *
+   * `null` — bukan `[]` — bila transaksinya tidak dipecah. Bedanya
+   * disengaja: larik kosong berarti "dipecah menjadi nol bagian", keadaan
+   * yang tidak sah dan tidak pernah ada. `null` berarti "tidak dipecah", dan
+   * `categoryId` di atas adalah seluruh ceritanya.
+   */
+  splits: TransactionSplit[] | null;
+}
+
+export interface TransactionSplit {
+  id: string;
+  categoryId: string;
+  /** Rupiah bulat, selalu positif. Jumlah seluruhnya = `amount` transaksi. */
+  amount: number;
+  note: string | null;
 }
 
 export interface TransactionPage {

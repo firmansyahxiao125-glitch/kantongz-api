@@ -297,6 +297,38 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
           },
         },
 
+        SplitInput: {
+          type: 'object',
+          required: ['splits'],
+          properties: {
+            splits: {
+              type: 'array',
+              minItems: 2,
+              maxItems: 20,
+              items: {
+                type: 'object',
+                required: ['categoryId', 'amount'],
+                properties: {
+                  categoryId: { type: 'string' },
+                  amount: { type: 'integer', minimum: 1, description: 'Rupiah bulat, positif.' },
+                  note: { type: 'string', maxLength: 280 },
+                },
+              },
+            },
+          },
+        },
+
+        TransactionSplit: {
+          type: 'object',
+          required: ['id', 'categoryId', 'amount', 'note'],
+          properties: {
+            id: { type: 'string' },
+            categoryId: { type: 'string' },
+            amount: { type: 'integer' },
+            note: { type: 'string', nullable: true },
+          },
+        },
+
         SaranKategori: {
           type: 'object',
           nullable: true,
@@ -331,6 +363,7 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
             'occurredAt',
             'note',
             'merchant',
+            'splits',
           ],
           additionalProperties: false,
           properties: {
@@ -339,6 +372,12 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
             counterAccountId: {
               type: ['string', 'null'],
               description: 'Hanya untuk `transfer`. Transfer adalah SATU baris dengan dua dompet.',
+            },
+            splits: {
+              type: ['array', 'null'],
+              items: ref('TransactionSplit'),
+              description:
+                '`null` — bukan `[]` — bila tidak dipecah. Larik kosong berarti "dipecah menjadi nol bagian", keadaan yang tidak sah dan tidak pernah ada.',
             },
             categoryId: { type: ['string', 'null'] },
             kind: { type: 'string', enum: ['income', 'expense', 'transfer'] },
@@ -1513,6 +1552,44 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
               content: json(envelope(ref('SaranKategori'))),
             },
             ...errors('invalid_input', 'session_expired'),
+          },
+        },
+      },
+
+      '/v1/transactions/{id}/splits': {
+        put: {
+          tags: ['transaksi'],
+          summary: 'Memecah transaksi ke beberapa kategori',
+          description:
+            '`category_id` transaksi TIDAK dibuang — ia mengikuti pecahan bernominal terbesar, ' +
+            'supaya penyaringan daftar, berkas ekspor, dan laporan yang belum tahu apa-apa ' +
+            'tentang pecahan tetap menjawab sesuatu yang masuk akal. ' +
+            'Jumlah seluruh pecahan WAJIB sama persis dengan nominal transaksi — tanpa ' +
+            'toleransi, karena seluruh nominal bilangan bulat rupiah dan tidak ada pembulatan. ' +
+            'Invarian itulah yang membuat agregasi laporan tidak menghitung ganda. ' +
+            'Mengganti nominal transaksi lewat `PUT /v1/transactions/{id}` MEMBUANG pecahannya: ' +
+            'pecahan lama menjumlah ke nominal lama, dan menskalakannya menghasilkan angka yang ' +
+            'tidak pernah dipilih siapa pun. ' +
+            'Transfer tidak dapat dipecah: ia memindahkan uang antar dompet sendiri, tidak ' +
+            'dibelanjakan ke kategori apa pun.',
+          security: SECURED,
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: { required: true, content: json(ref('SplitInput')) },
+          responses: {
+            '200': { description: 'transaksi', content: json(envelope(ref('Transaction'))) },
+            ...errors('not_found', 'invalid_input', 'session_expired'),
+          },
+        },
+        delete: {
+          tags: ['transaksi'],
+          summary: 'Membatalkan pemecahan',
+          description:
+            'Transaksinya tetap ada dan `category_id`-nya tetap kategori utama yang terakhir berlaku.',
+          security: SECURED,
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            '200': { description: 'transaksi', content: json(envelope(ref('Transaction'))) },
+            ...errors('not_found', 'session_expired'),
           },
         },
       },
