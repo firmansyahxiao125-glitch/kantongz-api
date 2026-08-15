@@ -1,3 +1,4 @@
+import { dompetTerlihat } from '../ledger/akses-dompet.js';
 import type { InsightDigest } from '../../contracts/insight.js';
 import { DomainError } from '../../contracts/domain.js';
 import type { Database } from '../../platform/db/client.js';
@@ -99,7 +100,7 @@ export async function simulate(
 
   const [flow, balances] = await Promise.all([
     ledger.cashflow(deps.db, userId, window.from, window.to, 'day'),
-    ledger.balances(deps.db, userId),
+    ledger.balances(deps.db, userId, await dompetTerlihat(deps.db, userId)),
   ]);
 
   const saldo = [...balances.values()].reduce((sum, b) => sum + b, 0);

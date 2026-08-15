@@ -297,6 +297,18 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
           },
         },
 
+        AnggotaDompet: {
+          type: 'object',
+          required: ['memberId', 'email', 'fullName', 'role', 'sharedAt'],
+          properties: {
+            memberId: { type: 'string' },
+            email: { type: 'string' },
+            fullName: { type: 'string' },
+            role: { type: 'string', enum: ['lihat', 'catat'] },
+            sharedAt: { type: 'integer', description: 'Epoch milidetik.' },
+          },
+        },
+
         SplitInput: {
           type: 'object',
           required: ['splits'],
@@ -1608,6 +1620,78 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
               content: json(envelope(ref('SaranKategori'))),
             },
             ...errors('invalid_input', 'session_expired'),
+          },
+        },
+      },
+
+      '/v1/accounts/{id}/shares': {
+        get: {
+          tags: ['dompet'],
+          summary: 'Anggota dompet bersama',
+          description: 'HANYA pemilik. Bukan pemilik menerima 404, sama seperti dompet yang memang tidak ada.',
+          security: SECURED,
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            '200': {
+              description: 'daftar anggota',
+              content: json(envelope({ type: 'array', items: ref('AnggotaDompet') })),
+            },
+            ...errors('not_found', 'session_expired'),
+          },
+        },
+        post: {
+          tags: ['dompet'],
+          summary: 'Membagikan dompet',
+          description:
+            'HANYA pemilik. Peran `lihat` melihat dompet dan transaksinya tanpa menulis apa pun; ' +
+            '`catat` boleh mencatat transaksi padanya. Tidak ada peran yang boleh mengganti nama ' +
+            'dompet, mengarsipkannya, atau MEMBAGIKANNYA LAGI — berbagi yang dapat dirantai ' +
+            'membuat pemilik kehilangan jejak siapa saja yang melihat pembukuannya. ' +
+            'Membagikan ulang kepada orang yang sama MENGGANTI perannya alih-alih gagal: ' +
+            'hapus-lalu-tambah meninggalkan jendela ketika orangnya tidak punya akses sama sekali. ' +
+            'Transaksi yang dicatat anggota tetap MILIK ANGGOTA — dompetnya dibagikan, ' +
+            'pembukuannya tidak.',
+          security: SECURED,
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            required: true,
+            content: json({
+              type: 'object',
+              required: ['email', 'role'],
+              properties: {
+                email: { type: 'string', format: 'email', maxLength: 320 },
+                role: { type: 'string', enum: ['lihat', 'catat'] },
+              },
+            }),
+          },
+          responses: {
+            '200': {
+              description: 'daftar anggota sesudah perubahan',
+              content: json(envelope({ type: 'array', items: ref('AnggotaDompet') })),
+            },
+            ...errors('not_found', 'invalid_input', 'session_expired'),
+          },
+        },
+      },
+
+      '/v1/accounts/{id}/shares/{memberId}': {
+        delete: {
+          tags: ['dompet'],
+          summary: 'Mencabut akses seorang anggota',
+          description:
+            'HANYA pemilik. Mencabut akses TIDAK menghapus transaksi yang sudah dicatat anggota — ' +
+            'itu tetap miliknya, dan menghapusnya berarti uang yang hilang dari pembukuan seseorang.',
+          security: SECURED,
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'memberId', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            '200': {
+              description: 'daftar anggota yang tersisa',
+              content: json(envelope({ type: 'array', items: ref('AnggotaDompet') })),
+            },
+            ...errors('not_found', 'session_expired'),
           },
         },
       },

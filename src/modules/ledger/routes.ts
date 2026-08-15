@@ -108,6 +108,12 @@ const schemas = {
      yang lebih panjang daripada yang mungkin tersimpan tidak dapat berasal
      dari pemakaian yang sah. */
   suggestQuery: z.object({ merchant: z.string().trim().min(1).max(120) }),
+  /* G3. Peran divalidasi sebagai enum di sini DAN dijepit lagi di penyelesai:
+     nilai asing di basis data ditolak, bukan diturunkan ke peran terendah. */
+  share: z.object({
+    email: z.string().trim().email().max(320),
+    role: z.enum(['lihat', 'catat']),
+  }),
   /* F3. Jumlahnya TIDAK diperiksa di sini: ia bergantung pada nominal
      transaksi, yang baru diketahui sesudah kepemilikannya terbukti. Skema
      hanya menjaga bentuknya. */
@@ -245,6 +251,42 @@ export function registerLedgerRoutes(app: App, deps: LedgerRouteDeps): void {
       success(await service.suggestCategory(deps, userId, query.merchant), request.requestId),
     );
   });
+
+  /* ── dompet bersama. G3 ─────────────────────────────────────────────
+     Ketiganya HANYA untuk pemilik. Peran `catat` boleh mencatat transaksi
+     pada dompetnya, tidak membagikannya lagi kepada orang lain — berbagi
+     yang dapat dirantai membuat pemilik kehilangan jejak siapa saja yang
+     melihat pembukuannya. */
+  app.get<{ Params: { id: string } }>('/v1/accounts/:id/shares', async (request, reply) => {
+    const userId = await callerId(request);
+    void reply.send(
+      success(await service.listShares(deps, userId, request.params.id), request.requestId),
+    );
+  });
+
+  app.post<{ Params: { id: string } }>('/v1/accounts/:id/shares', async (request, reply) => {
+    const userId = await callerId(request);
+    const body = parse(schemas.share, request.body);
+    void reply.send(
+      success(
+        await service.shareAccount(deps, userId, request.params.id, body.email, body.role),
+        request.requestId,
+      ),
+    );
+  });
+
+  app.delete<{ Params: { id: string; memberId: string } }>(
+    '/v1/accounts/:id/shares/:memberId',
+    async (request, reply) => {
+      const userId = await callerId(request);
+      void reply.send(
+        success(
+          await service.unshareAccount(deps, userId, request.params.id, request.params.memberId),
+          request.requestId,
+        ),
+      );
+    },
+  );
 
   app.post('/v1/transactions', async (request, reply) => {
     const userId = await callerId(request);

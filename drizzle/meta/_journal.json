@@ -50,6 +50,13 @@
       "when": 1786684145308,
       "tag": "0006_pecahan_transaksi",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786687145308,
+      "tag": "0007_dompet_bersama",
+      "breakpoints": true
     }
   ]
 }

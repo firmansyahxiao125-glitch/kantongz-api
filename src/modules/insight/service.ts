@@ -1,3 +1,4 @@
+import { dompetTerlihat } from '../ledger/akses-dompet.js';
 import { and, desc, eq, gte, isNull } from 'drizzle-orm';
 
 import type {
@@ -180,7 +181,7 @@ export async function digest(
 ): Promise<InsightDigest> {
   const [history, balances, budgets, categoryRows] = await Promise.all([
     expenseHistory(deps, userId, now),
-    ledger.balances(deps.db, userId),
+    ledger.balances(deps.db, userId, await dompetTerlihat(deps.db, userId)),
     ledger.listBudgets(deps.db, userId),
     deps.db
       .select({ id: categories.id, name: categories.name })

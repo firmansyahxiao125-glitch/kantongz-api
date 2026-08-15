@@ -31,31 +31,52 @@ import { newId } from '../audit/index.js';
 
 /* ── dompet ──────────────────────────────────────────────────────────── */
 
+/**
+ * Dompet menurut daftar id yang SUDAH diizinkan. G3.
+ *
+ * Menerima id, bukan `userId`, dan itu perubahan yang disengaja: sejak dompet
+ * dapat dibagikan, "milik siapa" bukan lagi pertanyaan yang jawabannya satu
+ * perbandingan kolom. Yang menjawabnya `akses-dompet.ts`, dan lapisan ini
+ * kembali menjadi apa yang seharusnya — pembaca, bukan pemutus.
+ *
+ * Daftar kosong mengembalikan larik kosong tanpa menyentuh basis data.
+ * `inArray` dengan larik kosong menghasilkan SQL yang berbeda antar pengandar,
+ * dan tidak satu pun dari perbedaan itu perlu diandalkan pada jalur izin.
+ */
 export async function listAccounts(
   db: Database,
-  userId: string,
+  ids: string[],
   includeArchived: boolean,
 ): Promise<WalletAccountRow[]> {
+  if (ids.length === 0) return [];
+
   return db
     .select()
     .from(walletAccounts)
     .where(
       includeArchived
-        ? eq(walletAccounts.userId, userId)
-        : and(eq(walletAccounts.userId, userId), isNull(walletAccounts.archivedAt)),
+        ? inArray(walletAccounts.id, ids)
+        : and(inArray(walletAccounts.id, ids), isNull(walletAccounts.archivedAt)),
     )
     .orderBy(asc(walletAccounts.createdAt));
 }
 
-export async function findAccount(
+/**
+ * Satu dompet menurut id, TANPA memeriksa izin. G3.
+ *
+ * Namanya menyebutkan itu apa adanya. Pemanggilnya WAJIB sudah bertanya
+ * kepada `aksesDompet` lebih dulu — dan karena tanda tangannya tidak lagi
+ * menerima `userId`, tidak ada lagi jalur yang terlihat seperti sudah
+ * memeriksa padahal tidak.
+ */
+export async function findAccountById(
   db: Database,
-  userId: string,
   id: string,
 ): Promise<WalletAccountRow | null> {
   const rows = await db
     .select()
     .from(walletAccounts)
-    .where(and(eq(walletAccounts.userId, userId), eq(walletAccounts.id, id)))
+    .where(eq(walletAccounts.id, id))
     .limit(1);
   return rows[0] ?? null;
 }
@@ -81,9 +102,15 @@ export async function insertAccount(
   return row;
 }
 
-export async function updateAccount(
+/**
+ * Mengubah dompet, TANPA memeriksa izin. G3.
+ *
+ * Hanya pemilik yang boleh sampai ke sini — `bolehKelola` di lapisan layanan
+ * yang memastikannya. Peran `catat` sengaja tidak dapat mengganti nama atau
+ * mengarsipkan dompet orang lain.
+ */
+export async function updateAccountById(
   db: Database,
-  userId: string,
   id: string,
   patch: Partial<{
     name: string;
@@ -95,7 +122,7 @@ export async function updateAccount(
   const rows = await db
     .update(walletAccounts)
     .set({ ...patch, updatedAt: new Date() })
-    .where(and(eq(walletAccounts.userId, userId), eq(walletAccounts.id, id)))
+    .where(eq(walletAccounts.id, id))
     .returning();
   return rows[0] ?? null;
 }
@@ -111,7 +138,11 @@ export async function updateAccount(
  * `account_id`, masuk ke `counter_account_id` — dan itulah alasan satu baris
  * transfer tidak pernah bisa kehilangan pasangannya.
  */
-export async function balances(db: Database, userId: string): Promise<Map<string, number>> {
+export async function balances(
+  db: Database,
+  userId: string,
+  ids: string[],
+): Promise<Map<string, number>> {
   const alive = and(eq(transactions.userId, userId), isNull(transactions.deletedAt));
 
   /*
@@ -143,10 +174,14 @@ export async function balances(db: Database, userId: string): Promise<Map<string
       .where(and(alive, eq(transactions.kind, 'transfer')))
       .groupBy(transactions.counterAccountId),
 
-    db
-      .select({ id: walletAccounts.id, opening: walletAccounts.openingBalance })
-      .from(walletAccounts)
-      .where(eq(walletAccounts.userId, userId)),
+    /* Saldo awal hanya untuk dompet yang boleh dilihat pemanggilnya. Daftar
+       id-nya datang dari `akses-dompet.ts`, bukan disusun ulang di sini. */
+    ids.length === 0
+      ? Promise.resolve([] as { id: string; opening: number }[])
+      : db
+          .select({ id: walletAccounts.id, opening: walletAccounts.openingBalance })
+          .from(walletAccounts)
+          .where(inArray(walletAccounts.id, ids)),
   ]);
 
   const balance = new Map(accounts.map((row) => [row.id, row.opening]));

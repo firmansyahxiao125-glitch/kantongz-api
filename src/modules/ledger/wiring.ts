@@ -1,6 +1,7 @@
 import type { Config } from '../../config/index.js';
 import type { Database } from '../../platform/db/client.js';
 import type { App } from '../../http/types.js';
+import { createKeyProvider } from '../../platform/crypto/keys.js';
 import { keyRingFromPem, type PemKeyPair } from '../tokens/keys.js';
 import { registerLedgerRoutes } from './routes.js';
 
@@ -31,6 +32,12 @@ export async function registerLedger(
 
   registerLedgerRoutes(app, {
     db: deps.db,
+    /* Dibutuhkan berbagi dompet (G3): alamat email tersimpan terenkripsi dan
+       hanya dapat dicari lewat HMAC-nya. */
+    keys: createKeyProvider({
+      master: config.MASTER_KEY,
+      activeHmacVersion: config.HMAC_KEY_VERSION,
+    }),
     ring: await keyRingFromPem(pairs),
     issuer: { issuer: config.JWT_ISSUER, audience: config.JWT_AUDIENCE },
   });

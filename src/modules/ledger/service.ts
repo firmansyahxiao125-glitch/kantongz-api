@@ -10,6 +10,7 @@ import type {
   TransactionPage,
   WalletAccount,
 } from '../../contracts/ledger.js';
+import type { KeyProvider } from '../../platform/crypto/index.js';
 import type { Database } from '../../platform/db/client.js';
 import type {
   BudgetRow,
@@ -22,6 +23,9 @@ import type {
 import { DEFAULT_CURRENCY, assertAmount, isSupportedCurrency } from './money.js';
 import { daysBack, monthRange, periodStart, previousMonthRange, toDateString } from './periods.js';
 import * as repo from './repository.js';
+import { findAccountByEmail } from '../auth/repository.js';
+import { aksesDompet, bolehKelola, bolehTulis, dompetTerlihat } from './akses-dompet.js';
+import * as berbagi from './berbagi-dompet.js';
 import { kategoriUtama, periksaPecahan, type BarisPecahan } from './pecahan.js';
 import { carryOverFor, limitOf } from './rollover.js';
 import { sarankanKategori, type Saran } from './saran-kategori.js';
@@ -37,6 +41,16 @@ import { sarankanKategori, type Saran } from './saran-kategori.js';
 
 export interface LedgerDeps {
   db: Database;
+  /**
+   * Dibutuhkan HANYA oleh berbagi dompet (G3): alamat email tersimpan
+   * terenkripsi dan hanya dapat dicari lewat HMAC-nya.
+   *
+   * Opsional supaya jalur-jalur lama — dan seluruh ujinya — tidak perlu
+   * merakit penyedia kunci untuk memanggil `listAccounts`. Yang membutuhkan
+   * kunci menolak dengan jelas ketika ia tidak ada, alih-alih melanjutkan
+   * tanpanya.
+   */
+  keys?: KeyProvider | undefined;
 }
 
 /** Berapa banyak transaksi yang boleh diminta sekaligus. Di atas ini permintaan
@@ -133,9 +147,14 @@ export async function listAccounts(
   userId: string,
   includeArchived = false,
 ): Promise<WalletAccount[]> {
+  /* Dompet yang boleh DILIHAT: miliknya sendiri ditambah yang dibagikan
+     kepadanya. Daftarnya datang dari penyelesai tunggal, bukan disusun ulang
+     di sini. G3. */
+  const terlihat = await dompetTerlihat(deps.db, userId);
+
   const [rows, balances] = await Promise.all([
-    repo.listAccounts(deps.db, userId, includeArchived),
-    repo.balances(deps.db, userId),
+    repo.listAccounts(deps.db, terlihat, includeArchived),
+    repo.balances(deps.db, userId, terlihat),
   ]);
 
   return rows.map((row) => toAccount(row, balances.get(row.id) ?? row.openingBalance));
@@ -183,7 +202,13 @@ export async function updateAccount(
     archived?: boolean | undefined;
   },
 ): Promise<WalletAccount> {
-  const row = await repo.updateAccount(deps.db, userId, id, {
+  /* Hanya PEMILIK yang boleh mengubah dompet. Peran `catat` boleh mencatat
+     transaksi padanya, tidak mengganti namanya atau mengarsipkannya. G3. */
+  if (!bolehKelola(await aksesDompet(deps.db, userId, id))) {
+    throw new DomainError('not_found', 'dompet tidak ditemukan');
+  }
+
+  const row = await repo.updateAccountById(deps.db, id, {
     ...(patch.name === undefined ? {} : { name: patch.name.trim() }),
     ...(patch.kind === undefined ? {} : { kind: patch.kind }),
     ...(patch.color === undefined ? {} : { color: patch.color }),
@@ -192,7 +217,7 @@ export async function updateAccount(
 
   if (!row) throw new DomainError('not_found', 'dompet tidak ditemukan');
 
-  const balances = await repo.balances(deps.db, userId);
+  const balances = await repo.balances(deps.db, userId, [row.id]);
   return toAccount(row, balances.get(row.id) ?? row.openingBalance);
 }
 
@@ -320,7 +345,14 @@ export async function resolveShape(
 ): Promise<{ counterAccountId: string | null; categoryId: string | null; currency: string }> {
   assertAmount(input.amount);
 
-  const account = await repo.findAccount(deps.db, userId, input.accountId);
+  /* MENULIS menuntut peran `pemilik` atau `catat`. Ditolak sebagai
+     `not_found`, sama seperti dompet yang memang tidak ada: membedakan
+     "tidak ada" dari "ada tapi kamu cuma boleh melihat" memberi tahu orang
+     luar dompet mana yang benar-benar ada. G3. */
+  if (!bolehTulis(await aksesDompet(deps.db, userId, input.accountId))) {
+    throw new DomainError('not_found', 'dompet tidak ditemukan');
+  }
+  const account = await repo.findAccountById(deps.db, input.accountId);
   if (!account) throw new DomainError('not_found', 'dompet tidak ditemukan');
 
   if (input.kind === 'transfer') {
@@ -329,7 +361,10 @@ export async function resolveShape(
       throw new DomainError('invalid_input', 'dompet tujuan harus berbeda');
     }
 
-    const counter = await repo.findAccount(deps.db, userId, input.counterAccountId);
+    if (!bolehTulis(await aksesDompet(deps.db, userId, input.counterAccountId))) {
+      throw new DomainError('not_found', 'dompet tujuan tidak ditemukan');
+    }
+    const counter = await repo.findAccountById(deps.db, input.counterAccountId);
     if (!counter) throw new DomainError('not_found', 'dompet tujuan tidak ditemukan');
 
     /* Transfer lintas mata uang membutuhkan kurs, dan kurs yang tidak dicatat
@@ -751,4 +786,95 @@ export async function suggestCategory(
      data — ia ditanam saat boot, bukan lewat migrasi. */
   const perNama = new Map(kategori.map((k) => [k.name, k.id]));
   return sarankanKategori(merchant, riwayat, (nama) => perNama.get(nama) ?? null);
+}
+
+/* ── dompet bersama. G3 ──────────────────────────────────────────────── */
+
+export interface AnggotaDompet {
+  memberId: string;
+  email: string;
+  fullName: string;
+  role: 'lihat' | 'catat';
+  sharedAt: number;
+}
+
+function kunciAtauTolak(deps: LedgerDeps): KeyProvider {
+  if (!deps.keys) {
+    /* Bukan lanjut tanpa kunci. Alamat email tersimpan terenkripsi, dan jalur
+       yang mencoba mencarinya tanpa penyedia kunci akan mencocokkan HMAC yang
+       salah — lalu menjawab "pengguna tidak ditemukan" untuk pengguna yang
+       sebenarnya ada. Gagal berisik jauh lebih baik. */
+    throw new DomainError('invalid_input', 'berbagi dompet tidak tersedia pada rakitan ini');
+  }
+  return deps.keys;
+}
+
+async function wajibPemilik(deps: LedgerDeps, userId: string, accountId: string): Promise<void> {
+  if (!bolehKelola(await aksesDompet(deps.db, userId, accountId))) {
+    /* `not_found`, bukan `forbidden`. Membedakan keduanya memberi tahu orang
+       luar dompet mana yang benar-benar ada. */
+    throw new DomainError('not_found', 'dompet tidak ditemukan');
+  }
+}
+
+export async function listShares(
+  deps: LedgerDeps,
+  userId: string,
+  accountId: string,
+): Promise<AnggotaDompet[]> {
+  await wajibPemilik(deps, userId, accountId);
+  return berbagi.listShares(deps.db, kunciAtauTolak(deps), accountId);
+}
+
+/**
+ * Membagikan dompet kepada satu orang lain. G3.
+ *
+ * ── MENGAPA MEMBAGIKAN ULANG MENGGANTI PERANNYA, BUKAN GAGAL ───────────
+ *
+ * Indeks unik `wallet_shares_once` menjamin satu baris per pasangan. Membalas
+ * 409 pada percakapan kedua memaksa pemilik menghapus lalu menambah lagi
+ * hanya untuk menurunkan `catat` menjadi `lihat` — dan di antara kedua
+ * langkah itu ada jendela ketika orangnya tidak punya akses sama sekali.
+ * Mengganti perannya di tempat tidak punya jendela itu.
+ */
+export async function shareAccount(
+  deps: LedgerDeps,
+  userId: string,
+  accountId: string,
+  email: string,
+  role: 'lihat' | 'catat',
+): Promise<AnggotaDompet[]> {
+  await wajibPemilik(deps, userId, accountId);
+  const keys = kunciAtauTolak(deps);
+
+  const tujuan = await findAccountByEmail(deps.db, keys, email);
+  if (!tujuan) throw new DomainError('not_found', 'pengguna tidak ditemukan');
+
+  if (tujuan.row.id === userId) {
+    /* Pemilik sudah punya akses penuh. Baris berbagi untuk dirinya sendiri
+       tidak menambah apa pun dan menciptakan keadaan yang harus diingat
+       penyelesai akses selamanya. */
+    throw new DomainError('invalid_input', 'dompet ini sudah milikmu');
+  }
+
+  if (tujuan.row.status !== 'active' || tujuan.row.deletedAt !== null) {
+    /* Akun yang belum memverifikasi alamatnya belum membuktikan alamat itu
+       miliknya. Membagikan pembukuan kepadanya berarti membagikannya kepada
+       siapa pun yang kebetulan menguasai alamat itu. */
+    throw new DomainError('not_found', 'pengguna tidak ditemukan');
+  }
+
+  await berbagi.upsertShare(deps.db, accountId, tujuan.row.id, role);
+  return berbagi.listShares(deps.db, keys, accountId);
+}
+
+export async function unshareAccount(
+  deps: LedgerDeps,
+  userId: string,
+  accountId: string,
+  memberId: string,
+): Promise<AnggotaDompet[]> {
+  await wajibPemilik(deps, userId, accountId);
+  await berbagi.deleteShare(deps.db, accountId, memberId);
+  return berbagi.listShares(deps.db, kunciAtauTolak(deps), accountId);
 }

@@ -389,6 +389,46 @@ export const transactionSplits = pgTable(
   ],
 );
 
+/**
+ * Peran pada dompet bersama. G3.
+ *
+ * Hanya DUA, dan sengaja: setiap peran tambahan adalah satu cabang lagi di
+ * penyelesai akses, dan setiap cabang di sana adalah tempat baru yang bisa
+ * salah membuka.
+ *
+ *   `lihat`  melihat dompet dan transaksinya. Tidak menulis apa pun.
+ *   `catat`  di atas itu, boleh mencatat transaksi pada dompetnya.
+ *
+ * Yang TIDAK ada peran untuknya: mengganti nama dompet, mengarsipkannya,
+ * membagikannya lagi, atau menghapus transaksi orang lain. Semuanya tetap
+ * milik pemilik saja.
+ */
+export const walletShareRole = pgEnum('wallet_share_role', ['lihat', 'catat']);
+
+export const walletShares = pgTable(
+  'wallet_shares',
+  {
+    id: text('id').primaryKey(),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => walletAccounts.id, { onDelete: 'cascade' }),
+    memberId: text('member_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    role: walletShareRole('role').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    /* Kueri terpanas: "dompet apa saja yang dapat dilihat orang ini". */
+    index('wallet_shares_member').on(t.memberId),
+    /* Satu peran per orang per dompet. Dua baris untuk pasangan yang sama
+       berarti penyelesai akses harus memilih di antara keduanya — dan
+       "memilih" pada keputusan izin selalu berakhir memilih yang lebih
+       longgar. */
+    uniqueIndex('wallet_shares_once').on(t.accountId, t.memberId),
+  ],
+);
+
 export type WalletAccountRow = typeof walletAccounts.$inferSelect;
 export type CategoryRow = typeof categories.$inferSelect;
 export type TransactionRow = typeof transactions.$inferSelect;
@@ -397,3 +437,4 @@ export type GoalRow = typeof goals.$inferSelect;
 export type RecurringRuleRow = typeof recurringRules.$inferSelect;
 export type RecurringRunRow = typeof recurringRuns.$inferSelect;
 export type TransactionSplitRow = typeof transactionSplits.$inferSelect;
+export type WalletShareRow = typeof walletShares.$inferSelect;

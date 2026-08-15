@@ -1,3 +1,4 @@
+import { dompetTerlihat } from '../ledger/akses-dompet.js';
 import type { Database } from '../../platform/db/client.js';
 import { DomainError } from '../../contracts/domain.js';
 import { findSubscriptions, monthlyCost } from '../insight/anomaly.js';
@@ -220,7 +221,7 @@ export async function ask(
     }
 
     case 'balance': {
-      const balances = await ledger.balances(deps.db, userId);
+      const balances = await ledger.balances(deps.db, userId, await dompetTerlihat(deps.db, userId));
       const total = [...balances.values()].reduce((sum, b) => sum + b, 0);
 
       return {
@@ -310,7 +311,7 @@ export async function ask(
       const window = daysBack(90, now);
       const [flow, balances] = await Promise.all([
         ledger.cashflow(deps.db, userId, window.from, window.to, 'day'),
-        ledger.balances(deps.db, userId),
+        ledger.balances(deps.db, userId, await dompetTerlihat(deps.db, userId)),
       ]);
 
       const saldo = [...balances.values()].reduce((sum, b) => sum + b, 0);
