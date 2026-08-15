@@ -116,6 +116,34 @@ const schema = z.object({
   RECURRING_INTERVAL_MS: z.coerce.number().int().min(200).max(3_600_000).default(60_000),
 
   /**
+   * Penghapusan PERMANEN. Mati secara bawaan. F4.
+   *
+   * Satu-satunya kemampuan di repositori ini yang kegagalannya tidak dapat
+   * diperbaiki: saldo dihitung ulang, kategori diganti, pengingat dikirim
+   * lagi — data yang benar-benar dihapus tidak kembali kepada siapa pun,
+   * termasuk kepada yang menulis kodenya.
+   *
+   * Bawaannya `false`, dan itu bukan kehati-hatian yang berlebihan melainkan
+   * arah kesalahan yang benar: server yang lupa menyalakannya menyimpan data
+   * lebih lama daripada seharusnya, sedangkan server yang menyalakannya tanpa
+   * sengaja menghapus data yang tidak akan pernah kembali.
+   */
+  PURGE_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+
+  /**
+   * Masa tunggu sesudah hapus lunak, sebelum boleh dihapus permanen.
+   *
+   * Batas bawahnya ditegakkan LAGI di `pembersihan.ts`. Dua tempat yang
+   * memeriksa hal yang sama biasanya berlebihan; di sini tidak, karena yang
+   * satu menjaga berkas konfigurasi dan yang lain menjaga setiap pemanggil
+   * lain yang mungkin ada kelak.
+   */
+  PURGE_AFTER_DAYS: z.coerce.number().int().min(7).max(3650).default(30),
+
+  /**
    * Model LOKAL lewat Ollama. Penyedia BAWAAN untuk M11 dan M13.
    *
    * Tanpa akun, tanpa biaya berulang, dan tanpa satu pun byte data keuangan

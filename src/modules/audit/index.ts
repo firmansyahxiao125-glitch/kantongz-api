@@ -45,7 +45,11 @@ export type AuditEvent =
      atas alasan yang sama: ia menulis SELURUH pembukuan sekaligus, dan kalau
      ternyata bukan pemiliknya yang melakukannya, baris inilah satu-satunya
      jejak kapan itu terjadi. */
-  | 'account_restored';
+  | 'account_restored'
+  /* Penghapusan PERMANEN. F4. Satu-satunya kejadian yang tidak dapat
+     direkonstruksi dari data yang tersisa — catatannya adalah satu-satunya
+     jejak bahwa barisnya pernah ada. */
+  | 'account_purged';
 
 export interface AuditEntry {
   event: AuditEvent;

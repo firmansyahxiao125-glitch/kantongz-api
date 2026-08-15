@@ -1162,6 +1162,62 @@ export function buildOpenApiDocument(baseUrl: string): Record<string, unknown> {
         },
       },
 
+      '/v1/account/purge': {
+        post: {
+          tags: ['autentikasi'],
+          summary: 'Menghapus PERMANEN yang sudah dihapus-lunak dan sudah matang',
+          description:
+            'MATI SECARA BAWAAN. Menuntut TIGA hal sekaligus, dan ketiganya harus benar: ' +
+            'server menyalakannya lewat `PURGE_ENABLED`, permintaannya menyertakan ' +
+            '`dryRun: false`, dan barisnya sudah melewati masa tunggu `PURGE_AFTER_DAYS` ' +
+            '(sekurangnya 7 hari, dijepit lagi di dalam kode). ' +
+            'Bawaannya PRATINJAU: tanpa `dryRun: false` tidak satu baris pun dihapus. ' +
+            'Hanya menyentuh baris yang SUDAH dihapus-lunak — pembersihan bukan penghapusan, ' +
+            'ia hanya menuntaskan penghapusan yang sudah diminta sebelumnya. ' +
+            'Ini satu-satunya tempat di seluruh API yang tidak punya tombol batal, dan ' +
+            'satu-satunya kejadian yang dicatat sebagai `critical` di log audit.',
+          security: SECURED,
+          requestBody: {
+            required: false,
+            content: json({
+              type: 'object',
+              properties: {
+                dryRun: {
+                  type: 'boolean',
+                  default: true,
+                  description: 'Apa pun selain `false` berarti pratinjau — termasuk badan kosong.',
+                },
+              },
+            }),
+          },
+          responses: {
+            '200': {
+              description: 'hitungan; `pratinjau: false` berarti barisnya benar-benar hilang',
+              content: json(
+                envelope({
+                  type: 'object',
+                  required: ['pratinjau', 'jumlah', 'belumMatang', 'tungguHari'],
+                  properties: {
+                    pratinjau: { type: 'boolean' },
+                    jumlah: {
+                      type: 'object',
+                      required: ['transactions'],
+                      properties: { transactions: { type: 'integer' } },
+                    },
+                    belumMatang: {
+                      type: 'integer',
+                      description: 'Sudah dihapus-lunak tetapi masa tunggunya belum lewat.',
+                    },
+                    tungguHari: { type: 'integer' },
+                  },
+                }),
+              ),
+            },
+            ...errors('invalid_input', 'session_expired'),
+          },
+        },
+      },
+
       '/v1/account/restore': {
         post: {
           tags: ['autentikasi'],

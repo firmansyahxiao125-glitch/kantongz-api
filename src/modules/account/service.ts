@@ -7,6 +7,7 @@ import * as authRepo from '../auth/repository.js';
 import * as recurring from '../ledger/recurring.js';
 import * as ledger from '../ledger/service.js';
 import * as repo from './repository.js';
+import { putuskanPembersihan } from './pembersihan.js';
 import { rencanakanPemulihan, type Rencana } from './pemulihan.js';
 
 /**
@@ -324,4 +325,95 @@ export async function restoreAccount(
   });
 
   return { pratinjau: false, jumlah: rencana.jumlah, dilewati: rencana.dilewati };
+}
+
+/* ── penghapusan permanen. F4 ────────────────────────────────────────── */
+
+export interface PengaturanPembersihan {
+  /** Bawaannya `false` di `config`. Server harus menyalakannya sendiri. */
+  aktif: boolean;
+  tungguHari: number;
+}
+
+export interface HasilPembersihan {
+  /** `true` berarti tidak satu baris pun ditulis. Bawaannya begini. */
+  pratinjau: boolean;
+  jumlah: { transactions: number };
+  /** Sudah dihapus-lunak tetapi masa tunggunya belum lewat. */
+  belumMatang: number;
+  tungguHari: number;
+}
+
+/**
+ * Menghapus PERMANEN baris yang sudah dihapus-lunak dan sudah matang. F4.
+ *
+ * ── TIGA PENGHALANG, DAN KETIGANYA HARUS BENAR ─────────────────────────
+ *
+ *   1. `pengaturan.aktif`  — server menyalakannya lewat `PURGE_ENABLED`
+ *   2. `dryRun === false`  — permintaannya menyatakannya, bawaannya pratinjau
+ *   3. `deleted_at` sudah melewati masa tunggu
+ *
+ * Ketiganya diperiksa di sini, dalam urutan itu, dan yang pertama gagal
+ * menghentikan seluruhnya. Tidak ada jalur lain yang menghapus baris secara
+ * permanen di seluruh repositori ini.
+ *
+ * ── MENGAPA PRATINJAU MENJADI BAWAAN, BUKAN BENDERA TAMBAHAN ───────────
+ *
+ * Sama seperti pemulihan dan impor: kelalaian menyertakan bendera tidak boleh
+ * berakhir dengan data yang hilang. Di sini taruhannya paling tinggi, karena
+ * di sinilah satu-satunya tempat yang tidak punya tombol batal.
+ */
+export async function purgeDeleted(
+  deps: AccountDeps,
+  userId: string,
+  pengaturan: PengaturanPembersihan,
+  opsi: { dryRun: boolean },
+  requestId: string,
+): Promise<HasilPembersihan> {
+  if (!pengaturan.aktif) {
+    /*
+       Pesannya JELAS, bukan 404 yang menyamar.
+
+       Menyembunyikan keberadaan fitur ini tidak menjaga apa pun: pemanggilnya
+       sudah terbukti sebagai pemilik akunnya sendiri, dan yang dirahasiakan
+       hanya konfigurasi servernya sendiri. Yang benar-benar dirugikan oleh
+       404 adalah orang yang menunggu datanya benar-benar terhapus dan tidak
+       pernah diberi tahu bahwa servernya memang tidak melakukannya.
+    */
+    throw new DomainError(
+      'invalid_input',
+      'penghapusan permanen tidak diaktifkan di server ini',
+    );
+  }
+
+  const terhapus = await repo.softDeletedTransactions(deps.db, userId);
+  const keputusan = putuskanPembersihan(terhapus, new Date(), pengaturan.tungguHari);
+
+  if (opsi.dryRun) {
+    return {
+      pratinjau: true,
+      jumlah: { transactions: keputusan.hapus.length },
+      belumMatang: keputusan.belumMatang.length,
+      tungguHari: pengaturan.tungguHari,
+    };
+  }
+
+  const dihapus = await repo.hardDeleteTransactions(deps.db, userId, keputusan.hapus);
+
+  /* Dicatat sebagai `critical`, bukan `warning`. Ini satu-satunya kejadian di
+     sistem ini yang tidak dapat direkonstruksi dari data yang tersisa —
+     catatannya adalah satu-satunya jejak bahwa barisnya pernah ada. */
+  await writeAudit(deps.db, deps.keys, {
+    event: 'account_purged',
+    severity: 'critical',
+    actorId: userId,
+    requestId,
+  });
+
+  return {
+    pratinjau: false,
+    jumlah: { transactions: dihapus },
+    belumMatang: keputusan.belumMatang.length,
+    tungguHari: pengaturan.tungguHari,
+  };
 }

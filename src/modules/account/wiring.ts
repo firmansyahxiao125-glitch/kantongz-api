@@ -37,5 +37,8 @@ export async function registerAccount(
     }),
     ring: await keyRingFromPem(pairs),
     issuer: { issuer: config.JWT_ISSUER, audience: config.JWT_AUDIENCE },
+    /* Mati secara bawaan. Server yang lupa menyalakannya menyimpan data lebih
+       lama daripada seharusnya — arah kesalahan yang benar. F4. */
+    pembersihan: { aktif: config.PURGE_ENABLED, tungguHari: config.PURGE_AFTER_DAYS },
   });
 }

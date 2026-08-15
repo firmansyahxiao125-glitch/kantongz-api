@@ -11,6 +11,8 @@ import type { AccountDeps } from './service.js';
 export interface AccountRouteDeps extends AccountDeps {
   ring: KeyRing;
   issuer: IssuerConfig;
+  /** Penghapusan permanen. Mati secara bawaan — lihat `config`. F4. */
+  pembersihan: { aktif: boolean; tungguHari: number };
 }
 
 const schemas = {
@@ -61,6 +63,30 @@ export function registerAccountRoutes(app: App, deps: AccountRouteDeps): void {
     void reply.send(
       success(
         await service.restoreAccount(deps, userId, body?.data, { dryRun }, request.requestId),
+        request.requestId,
+      ),
+    );
+  });
+
+  /**
+   * Menghapus PERMANEN yang sudah dihapus-lunak dan sudah matang. F4.
+   *
+   * Bawaannya PRATINJAU, sama seperti pemulihan dan impor — dan di sini
+   * taruhannya paling tinggi, karena ini satu-satunya tempat di seluruh
+   * repositori yang tidak punya tombol batal.
+   *
+   * `dryRun !== false` dan bukan `dryRun === true`: badan yang tidak
+   * menyebutkan benderanya sama sekali, badan yang kosong, dan badan yang
+   * salah bentuk seluruhnya jatuh ke pratinjau.
+   */
+  app.post('/v1/account/purge', async (request, reply) => {
+    const userId = await caller(request);
+    const body = request.body as { dryRun?: unknown } | undefined;
+    const dryRun = body?.dryRun !== false;
+
+    void reply.send(
+      success(
+        await service.purgeDeleted(deps, userId, deps.pembersihan, { dryRun }, request.requestId),
         request.requestId,
       ),
     );
