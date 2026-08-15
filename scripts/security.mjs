@@ -260,7 +260,7 @@ const aturanA = await post('/v1/recurring', tokA, {
 ok('A dapat membuat aturan berulang', aturanA.s === 201, `(${String(aturanA.s)})`);
 
 r = await J(await fetch(`${BASE}/v1/recurring`, { headers: H(tokB) }));
-ok('B tidak melihat aturan A', !JSON.stringify(r.b).includes(aturanA.b.data?.id ?? ' '));
+ok('B tidak melihat aturan A', !JSON.stringify(r.b).includes(aturanA.b.data?.id ?? ''));
 
 r = await J(await fetch(`${BASE}/v1/recurring/${aturanA.b.data.id}`, {
   method: 'DELETE', headers: { Authorization: `Bearer ${tokB}` },
@@ -302,6 +302,132 @@ const sesudah = await (await fetch(`${BASE}/v1/recurring`, { headers: H(tokA) })
 const punyaA = (sesudah.data ?? []).find((x) => x.id === aturanA.b.data.id);
 ok('tanggal jalan maju sesudah dicatat', (punyaA?.nextRunOn ?? '') > hariIni, `(${String(punyaA?.nextRunOn)})`);
 ok('jumlah yang dilahirkan dihitung benar', punyaA?.postedCount === 1, `(${String(punyaA?.postedCount)})`);
+
+/* ── X2 · permukaan baru F3, F4, dan G3 ───────────────────────────────
+ *
+ * Ditambahkan SESUDAH ketiganya ada, dan sengaja di sini alih-alih hanya di
+ * uji satuan: yang diperiksa di bawah adalah server sungguhan dengan Postgres
+ * sungguhan, dua pengguna sungguhan, dan dua puluh satu pemeriksaan IDOR di
+ * atasnya yang harus TETAP hijau.
+ *
+ * Itu yang tidak dapat dibuktikan uji satuan: bahwa permukaan baru bertambah
+ * TANPA menggeser satu pun angka lama.
+ */
+
+console.log('\n--- Pecahan transaksi (F3) ---');
+
+const put = async (path, token, body) =>
+  J(await fetch(`${BASE}${path}`, { method: 'PUT', headers: H(token), body: JSON.stringify(body) }));
+/* TANPA `Content-Type`, dan itu bukan kerapian.
+
+   `H()` menyertakan `application/json`, dan Fastify menolak permintaan yang
+   mengaku berbadan JSON tetapi tidak berbadan sama sekali — dengan 400, bukan
+   404. Gerbang yang memakai `H()` di sini akan melaporkan "B tidak bisa
+   menghapus" karena alasan yang sama sekali tidak ada hubungannya dengan
+   kepemilikan, lalu tetap hijau seandainya kepemilikannya benar-benar bocor.
+
+   Pemeriksaan DELETE yang sudah ada di atas memakai pola ini sejak awal. */
+const hapus = async (path, token) =>
+  J(await fetch(`${BASE}${path}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }));
+
+const katPecah = (
+  await (await fetch(`${BASE}/v1/categories`, { headers: H(tokA) })).json()
+).data.filter((c) => c.kind === 'expense');
+
+const duaPecahan = (a, b) => ({
+  splits: [
+    { categoryId: katPecah[0].id, amount: a },
+    { categoryId: katPecah[1].id, amount: b },
+  ],
+});
+
+r = await put(`/v1/transactions/${trx.b.data.id}/splits`, tokB, duaPecahan(1_000, 1_000));
+ok('B tidak bisa memecah transaksi A', ditolak(r.s), `(${String(r.s)})`);
+
+r = await hapus(`/v1/transactions/${trx.b.data.id}/splits`, tokB);
+ok('B tidak bisa membatalkan pecahan A', ditolak(r.s), `(${String(r.s)})`);
+
+/* Dan pemiliknya sendiri TETAP bisa. Gerbang yang menolak semua orang
+   membuktikan keamanan yang tidak berguna. */
+const nominalA = trx.b.data.amount;
+const separuh = Math.floor(nominalA / 2);
+r = await put(`/v1/transactions/${trx.b.data.id}/splits`, tokA, duaPecahan(separuh, nominalA - separuh));
+ok('A bisa memecah transaksinya sendiri', r.s === 200, `(${String(r.s)})`);
+
+r = await put(`/v1/transactions/${trx.b.data.id}/splits`, tokA, duaPecahan(1, 1));
+ok('jumlah pecahan yang meleset ditolak', r.s === 422, `(${String(r.s)})`);
+
+console.log('\n--- Penghapusan permanen (F4) ---');
+
+r = await post('/v1/account/purge', tokA, { dryRun: false });
+ok('purge MATI secara bawaan, meski dryRun:false', r.s >= 400, `(${String(r.s)})`);
+
+r = await J(await fetch(`${BASE}/v1/account/purge`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }));
+ok('purge menolak tanpa token', r.s === 401, `(${String(r.s)})`);
+
+console.log('\n--- Dompet bersama (G3) ---');
+
+const dompetA = akun.b.data.id;
+
+r = await J(await fetch(`${BASE}/v1/accounts/${dompetA}/shares`, { headers: H(tokB) }));
+ok('B tidak bisa melihat anggota dompet A', ditolak(r.s), `(${String(r.s)})`);
+
+r = await post(`/v1/accounts/${dompetA}/shares`, tokB, { email: B.email, role: 'catat' });
+ok('B tidak bisa membagikan dompet A kepada dirinya', ditolak(r.s), `(${String(r.s)})`);
+
+r = await post(`/v1/accounts/${dompetA}/shares`, tokA, { email: B.email, role: 'lihat' });
+ok('A membagikan dompetnya ke B sebagai lihat', r.s === 200, `(${String(r.s)})`);
+
+let dompetB = await (await fetch(`${BASE}/v1/accounts`, { headers: H(tokB) })).json();
+ok(
+  'B kini MELIHAT dompet A',
+  (dompetB.data ?? []).some((w) => w.id === dompetA),
+);
+
+const catatKeA = (token, merchant) =>
+  post('/v1/transactions', token, {
+    accountId: dompetA,
+    kind: 'expense',
+    amount: 9_000,
+    occurredAt: Date.now(),
+    ...(merchant === undefined ? {} : { merchant }),
+  });
+
+r = await catatKeA(tokB);
+ok('peran lihat TIDAK bisa mencatat — gagal-tertutup', ditolak(r.s), `(${String(r.s)})`);
+
+r = await post(`/v1/accounts/${dompetA}/shares`, tokB, { email: A.email, role: 'catat' });
+ok('peran lihat tidak bisa membagikan ulang', ditolak(r.s), `(${String(r.s)})`);
+
+r = await post(`/v1/accounts/${dompetA}/shares`, tokA, { email: B.email, role: 'catat' });
+ok('membagikan ulang MENGGANTI peran, bukan gagal', r.s === 200, `(${String(r.s)})`);
+
+r = await catatKeA(tokB, 'X2 ANGGOTA');
+ok('peran catat bisa mencatat', r.s === 201, `(${String(r.s)})`);
+
+/* Dompetnya dibagikan; pembukuannya TIDAK. Transaksi yang berpindah pemilik
+   akan muncul di laporan A sebagai pengeluarannya sendiri. */
+const bukuA = await (await fetch(`${BASE}/v1/transactions?limit=100`, { headers: H(tokA) })).json();
+ok(
+  'transaksi anggota TIDAK masuk pembukuan pemilik',
+  !(bukuA.data?.items ?? []).some((t) => t.merchant === 'X2 ANGGOTA'),
+);
+
+const anggota = await (
+  await fetch(`${BASE}/v1/accounts/${dompetA}/shares`, { headers: H(tokA) })
+).json();
+const idB = (anggota.data ?? [])[0]?.memberId;
+r = await hapus(`/v1/accounts/${dompetA}/shares/${String(idB)}`, tokA);
+ok('A mencabut akses B', r.s === 200, `(${String(r.s)})`);
+
+r = await catatKeA(tokB);
+ok('sesudah dicabut, B tidak bisa mencatat lagi', ditolak(r.s), `(${String(r.s)})`);
+
+dompetB = await (await fetch(`${BASE}/v1/accounts`, { headers: H(tokB) })).json();
+ok(
+  'sesudah dicabut, B tidak melihat dompet A',
+  !(dompetB.data ?? []).some((w) => w.id === dompetA),
+);
 
 console.log(`\n  KEAMANAN: ${String(lulus)} lulus, ${String(gagal)} gagal`);
 process.exit(gagal > 0 ? 1 : 0);
